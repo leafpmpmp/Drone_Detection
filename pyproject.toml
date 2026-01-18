@@ -1,0 +1,33 @@
+[project]
+name = "drone-detection"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Flet developer", email = "you@example.com" }
+]
+dependencies = [
+  "flet>=0.80.2",
+  "opencv-python>=4.12.0.88",
+  "torch>=2.9.1",
+  "torchvision>=0.24.1",
+  "tensorboard",
+  "faster-coco-eval",
+  "scipy",
+  "tqdm",
+]
+
+[dependency-groups]
+dev = [
+  "flet[all]>=0.80.2",
+]
+
+[tool.flet]
+org = "com.mycompany"
+product = "drone-detection"
+company = "Flet"
+copyright = "Copyright (C) 2026 by Flet"
+
+[tool.flet.app]
+path = "src"

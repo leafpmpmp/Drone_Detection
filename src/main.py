@@ -1,3 +1,4 @@
+import os
 import flet as ft
 from dataclasses import dataclass, field
 from inference import DetectorEngine
@@ -34,6 +35,8 @@ async def main(page: ft.Page):
         print("Picked files:", files)
         state.picked_files = files
 
+        preview_container.controls.clear()
+
         # update progress bars
         prog_bars.clear()
         upload_progress.controls.clear()
@@ -41,6 +44,53 @@ async def main(page: ft.Page):
             prog = ft.ProgressRing(value=0, bgcolor="#eeeeee", width=20, height=20)
             prog_bars[f.name] = prog
             upload_progress.controls.append(ft.Row([prog, ft.Text(f.name)]))
+            file_ext = os.path.splitext(f.name)[1].lower()
+            is_image = file_ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+            if is_image:
+                # 如果是圖片，直接讀取本地路徑顯示縮圖
+                thumbnail = ft.Image(
+                    src=f.path,
+                    width=100,
+                    height=100,
+                    fit=ft.BoxFit.COVER,
+                    border_radius=8,
+                )
+            else:
+                # 如果是影片或其他檔案，顯示一個預設圖示
+                thumbnail = ft.Container(
+                    content=ft.Icon(
+                        ft.Icons.VIDEO_FILE, color=ft.Colors.GREY_400, size=40
+                    ),
+                    width=100,
+                    height=100,
+                    bgcolor=ft.Colors.GREY_200,
+                    border_radius=8,
+                    alignment=ft.alignment.center,
+                )
+            file_info = ft.Column(
+                [
+                    ft.Text(
+                        f.name,
+                        weight=ft.FontWeight.BOLD,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    ft.Text(
+                        f.path,
+                        size=12,
+                        color=ft.Colors.GREY_500,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                ],
+                expand=True,
+            )
+            preview_row = ft.Container(
+                content=ft.Row([thumbnail, file_info], spacing=15),
+                padding=10,
+                border=ft.border.all(1, ft.Colors.GREY_300),
+                border_radius=10,
+                bgcolor=ft.Colors.WHITE,
+            )
+            preview_container.controls.append(preview_row)
 
     def dummy_click(e):
         print(
@@ -132,6 +182,7 @@ async def main(page: ft.Page):
     # --- Tab 1: Model Detection ---
 
     upload_list = ft.Column()
+    preview_container = ft.Column(spacing=10, height=100, scroll=ft.ScrollMode.AUTO)
 
     detect_status_text = ft.Text("狀態: 等待操作")
     # Placeholder 1x1 transparent gif
@@ -154,6 +205,7 @@ async def main(page: ft.Page):
                     on_click=handle_files_pick,
                 ),
                 upload_list,
+                preview_container,
                 upload_progress := ft.Column(),
                 ft.Row(
                     [

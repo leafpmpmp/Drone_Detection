@@ -16,6 +16,7 @@ dependencies = [
   "faster-coco-eval",
   "scipy",
   "tqdm",
+  "ultralytics>=8.4.6",
 ]
 
 [dependency-groups]

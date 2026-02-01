@@ -405,7 +405,7 @@ async def main(page: ft.Page):
         weight=ft.FontWeight.BOLD,
     )
     btn_choose_file = ft.FilledButton(
-        state.lang_data.get("choose_file", "選擇圖片/影片"),
+        content=state.lang_data.get("choose_file", "選擇圖片/影片"),
         icon=ft.Icons.UPLOAD_FILE,
         on_click=handle_files_pick,
     )
@@ -482,15 +482,18 @@ async def main(page: ft.Page):
         nav_settings_dest.label = state.lang_data.get("settings_title", "設定")
 
         file_selection_title.value = state.lang_data.get("file_selection", "檔案選擇")
-        btn_choose_file.text = state.lang_data.get("choose_file", "選擇圖片/影片")
-        btn_start_infer.text = state.lang_data.get("infer_button", "開始推理")
-        btn_stop_infer.text = state.lang_data.get("interrupt_inference", "中斷")
-        btn_cleanup.text = state.lang_data.get("cleanup_button", "清理暫存")
+        btn_choose_file.content = state.lang_data.get("choose_file", "選擇圖片/影片")
+        btn_start_infer.content = state.lang_data.get("infer_button", "開始推理")
+        btn_stop_infer.content = state.lang_data.get("interrupt_inference", "中斷")
+        btn_cleanup.content = state.lang_data.get("cleanup_button", "清理暫存")
 
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
+        detect_status_text.value = state.lang_data.get(
+            "status_waiting", "狀態: 等待操作"
+        )
 
         detect_tab.update()
         settings_tab.update()

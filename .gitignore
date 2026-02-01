@@ -167,3 +167,6 @@ weights/
 
 #data files
 data/
+
+uploads/
+outputFile/

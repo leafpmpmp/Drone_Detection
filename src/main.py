@@ -8,6 +8,8 @@ import flet as ft
 from dataclasses import dataclass, field
 from inference import DetectorEngine
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 @dataclass
 class State:
@@ -22,16 +24,36 @@ class State:
 state = State()
 detector = DetectorEngine(r"weights\R50_att_C4_best.pth")
 
+
 def load_language(lang_code="zh"):
-    try:
-        with open(f"lang/{lang_code}.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading language: {e}")
-        return {}
+    candidates = [
+        os.path.join(BASE_DIR, "lang", f"{lang_code}.json"),
+        os.path.join(BASE_DIR, "..", "lang", f"{lang_code}.json"),
+    ]
+
+    for path in candidates:
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+            print("LANG PATH =", path)
+            print("lang file keys:", list(data.keys())[:10], "...")
+            print("title=", data.get("title"))
+            return data
+        except Exception as e:
+            print("LANG PATH =", path)
+            print(f"Error loading language ({lang_code}): {e}")
+            return {}
+
+    print("LANG PATH candidates not found:", candidates)
+    return {}
+
 
 # Initial load
 state.lang_data = load_language(state.language)
+
 
 async def main(page: ft.Page):
     page.title = state.lang_data.get("title", "無人機人員/異物偵測系統")
@@ -40,7 +62,9 @@ async def main(page: ft.Page):
     page.window.width = 1000
     page.window.height = 800
 
-    detect_status_text = ft.Text(state.lang_data.get("status_waiting", "狀態: 等待操作"))
+    detect_status_text = ft.Text(
+        state.lang_data.get("status_waiting", "狀態: 等待操作")
+    )
 
     pixel = (
         "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
@@ -84,7 +108,7 @@ async def main(page: ft.Page):
             cap.release()
             if not ret:
                 return None
-            
+
             # Resize for thumbnail
             frame = cv2.resize(frame, (100, 100))
             _, buffer = cv2.imencode(".jpg", frame)
@@ -212,7 +236,7 @@ async def main(page: ft.Page):
                     last_msg = msg
 
                 meta = detector.get_preview_meta()
-                
+
                 # Update progress bar
                 current_frames = meta.get("frames", 0)
                 total_frames = meta.get("total_frames", 0)
@@ -251,7 +275,7 @@ async def main(page: ft.Page):
                     detect_image_control.src_base64 = None
                     detect_image_control.visible = True
                     detect_image_control.update()
-                
+
                 detect_status_text.value = last_msg
                 detect_status_text.color = "blue"
                 detect_status_text.update()
@@ -261,7 +285,9 @@ async def main(page: ft.Page):
 
     async def click_start_inference(e):
         if not state.picked_files:
-            detect_status_text.value = state.lang_data.get("error_no_file", "❌ 請先選擇圖片或影片")
+            detect_status_text.value = state.lang_data.get(
+                "error_no_file", "❌ 請先選擇圖片或影片"
+            )
             detect_status_text.color = "red"
             page.update()
             return
@@ -274,7 +300,9 @@ async def main(page: ft.Page):
         detect_progress_row.visible = True
         detect_progress_bar.value = None
         detect_progress_text.value = "0%"
-        detect_status_text.value = state.lang_data.get("status_inferring", "狀態: 推理中（即時顯示）")
+        detect_status_text.value = state.lang_data.get(
+            "status_inferring", "狀態: 推理中（即時顯示）"
+        )
         detect_status_text.color = "blue"
         page.update()
 
@@ -289,7 +317,9 @@ async def main(page: ft.Page):
                 detect_image_control.src = b64_to_data_url(b64_img)
                 detect_image_control.src_base64 = None
                 detect_image_control.visible = True
-                detect_status_text.value = state.lang_data.get("status_image_completed", "✅ 狀態: 圖片推理完成")
+                detect_status_text.value = state.lang_data.get(
+                    "status_image_completed", "✅ 狀態: 圖片推理完成"
+                )
                 detect_status_text.color = "green"
                 detect_progress_row.visible = False
                 detect_result_container.controls.append(
@@ -297,7 +327,9 @@ async def main(page: ft.Page):
                 )
                 page.update()
             except Exception as err:
-                detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                detect_status_text.value = state.lang_data.get(
+                    "error_generic", "❌ 發生錯誤: {err}"
+                ).format(err=str(err))
                 detect_status_text.color = "red"
                 detect_progress_row.visible = False
                 page.update()
@@ -316,13 +348,17 @@ async def main(page: ft.Page):
                 state.preview_task = asyncio.create_task(inference_stream_loop())
                 page.update()
             except Exception as err:
-                detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                detect_status_text.value = state.lang_data.get(
+                    "error_generic", "❌ 發生錯誤: {err}"
+                ).format(err=str(err))
                 detect_status_text.color = "red"
                 detect_progress_row.visible = False
                 page.update()
             return
-            
-        detect_status_text.value = state.lang_data.get("error_unsupported_format", "❌ 不支援的檔案格式")
+
+        detect_status_text.value = state.lang_data.get(
+            "error_unsupported_format", "❌ 不支援的檔案格式"
+        )
         detect_status_text.color = "red"
         detect_progress_row.visible = False
         page.update()
@@ -332,7 +368,9 @@ async def main(page: ft.Page):
         if state.preview_task is not None and not state.preview_task.done():
             state.preview_task.cancel()
             state.preview_task = None
-        detect_status_text.value = state.lang_data.get("interrupted_msg", "⏹️ 已送出中斷")
+        detect_status_text.value = state.lang_data.get(
+            "interrupted_msg", "⏹️ 已送出中斷"
+        )
         detect_status_text.color = "orange"
         detect_progress_row.visible = False
         page.update()
@@ -354,10 +392,18 @@ async def main(page: ft.Page):
         page.update()
 
     # --- Controls references for language update ---
-    nav_model_dest = ft.NavigationBarDestination(icon=ft.Icons.RADAR, label=state.lang_data.get("model_system", "模型偵測系統"))
-    nav_settings_dest = ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label=state.lang_data.get("settings_title", "設定"))
-    
-    file_selection_title = ft.Text(state.lang_data.get("file_selection", "檔案選擇"), size=20, weight=ft.FontWeight.BOLD)
+    nav_model_dest = ft.NavigationBarDestination(
+        icon=ft.Icons.RADAR, label=state.lang_data.get("model_system", "模型偵測系統")
+    )
+    nav_settings_dest = ft.NavigationBarDestination(
+        icon=ft.Icons.SETTINGS, label=state.lang_data.get("settings_title", "設定")
+    )
+
+    file_selection_title = ft.Text(
+        state.lang_data.get("file_selection", "檔案選擇"),
+        size=20,
+        weight=ft.FontWeight.BOLD,
+    )
     btn_choose_file = ft.FilledButton(
         state.lang_data.get("choose_file", "選擇圖片/影片"),
         icon=ft.Icons.UPLOAD_FILE,
@@ -373,25 +419,37 @@ async def main(page: ft.Page):
         on_click=click_stop,
         style=ft.ButtonStyle(bgcolor=ft.Colors.RED, color=ft.Colors.WHITE),
     )
-    btn_cleanup = ft.FilledButton(state.lang_data.get("cleanup_button", "清理暫存"), on_click=click_clear)
+    btn_cleanup = ft.FilledButton(
+        state.lang_data.get("cleanup_button", "清理暫存"), on_click=click_clear
+    )
 
     # Settings controls
-    settings_title = ft.Text(state.lang_data.get("settings_title", "設定"), size=20, weight=ft.FontWeight.BOLD)
+    settings_title = ft.Text(
+        state.lang_data.get("settings_title", "設定"),
+        size=20,
+        weight=ft.FontWeight.BOLD,
+    )
     lang_select_label = ft.Text(state.lang_data.get("language_select", "語言選擇"))
-    
-    def on_lang_change(e):
+
+    def on_lang_select(e):
         state.language = e.control.value
         print(f"Language changed to: {state.language}")
         state.lang_data = load_language(state.language)
+        print("Loaded lang data keys:", list(state.lang_data.keys())[:10], "...")
         update_ui_text()
+        settings_tab.update()
+        detect_tab.update()
         page.update()
 
     lang_dropdown = ft.Dropdown(
         value=state.language,
-        options=[ft.dropdown.Option("zh", "繁體中文"), ft.dropdown.Option("en", "English")],
-        width=200
+        options=[
+            ft.DropdownOption(key="zh", text="繁體中文"),
+            ft.DropdownOption(key="en", text="English"),
+        ],
+        width=200,
     )
-    lang_dropdown.on_change = on_lang_change
+    lang_dropdown.on_select = on_lang_select
 
     def on_real_time_change(e):
         state.real_time_render = e.control.value
@@ -399,44 +457,44 @@ async def main(page: ft.Page):
 
     real_time_switch = ft.Switch(
         label=state.lang_data.get("real_time_render", "即時影像渲染"),
-        value=state.real_time_render
+        value=state.real_time_render,
     )
     real_time_switch.on_change = on_real_time_change
-    
-    conf_slider_label = ft.Text(f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}")
-    
+
+    conf_slider_label = ft.Text(
+        f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
+    )
+
     def on_conf_change(e):
         state.confidence = e.control.value
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
         page.update()
 
     conf_slider = ft.Slider(
-        min=0.1, 
-        max=1.0, 
-        divisions=18, 
-        value=state.confidence, 
-        label="{value}"
+        min=0.1, max=1.0, divisions=18, value=state.confidence, label="{value}"
     )
     conf_slider.on_change = on_conf_change
 
     def update_ui_text():
         page.title = state.lang_data.get("title", "無人機人員/異物偵測系統")
+
         nav_model_dest.label = state.lang_data.get("model_system", "模型偵測系統")
         nav_settings_dest.label = state.lang_data.get("settings_title", "設定")
-        
+
         file_selection_title.value = state.lang_data.get("file_selection", "檔案選擇")
         btn_choose_file.text = state.lang_data.get("choose_file", "選擇圖片/影片")
         btn_start_infer.text = state.lang_data.get("infer_button", "開始推理")
         btn_stop_infer.text = state.lang_data.get("interrupt_inference", "中斷")
         btn_cleanup.text = state.lang_data.get("cleanup_button", "清理暫存")
-        
+
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
-        
-        if detect_status_text.value == "狀態: 等待操作" or detect_status_text.value == "Status: Waiting for operation":
-             detect_status_text.value = state.lang_data.get("status_waiting", "狀態: 等待操作")
+
+        detect_tab.update()
+        settings_tab.update()
+        page.navigation_bar.update()
 
     settings_tab = ft.Container(
         content=ft.Column(

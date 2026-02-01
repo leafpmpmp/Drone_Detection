@@ -164,8 +164,13 @@ def draw(images, labels, boxes, scores, thrh=0.6, path=""):
 def initModel(args):
     print("Load parameters")
     cfg = YAMLConfig(args.config, resume=args.resume)
+
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cuda", weights_only=True)
+        # Disable backbone pretraining download since we are loading a full checkpoint
+        if 'PResNet' in cfg.yaml_cfg:
+            cfg.yaml_cfg['PResNet']['pretrained'] = False
+            
+        checkpoint = torch.load(args.resume, map_location=args.device, weights_only=True)
         if "ema" in checkpoint:
             state = checkpoint["ema"]["module"]
         else:
@@ -198,7 +203,7 @@ def Inference(args):
     print("Load parameters")
     cfg = YAMLConfig(args.config, resume=args.resume)
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cuda")
+        checkpoint = torch.load(args.resume, map_location=args.device)
         if "ema" in checkpoint:
             state = checkpoint["ema"]["module"]
         else:
@@ -314,22 +319,17 @@ def Inference(args):
         cv2.imwrite(os.path.join(args.outputdir, f"{video_name}.jpg"), frame_out)
 
 
-def InitArgs(imfile, video, outputdir, device):
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        default=r".\rtdetrv2\configs\rtdetrv2\rtdetrv2_r50vd_6x_coco.yml",
-    )
-    parser.add_argument(
-        "-r", "--resume", type=str, default=r".\weights\R50_att_C4_best.pth"
-    )  # 要改model暫時先從這裡改
-    parser.add_argument("-f", "--imfile", type=str, default=imfile)
-    parser.add_argument("-s", "--sliced", type=bool, default=False)
-    parser.add_argument("-d", "--device", type=str, default=device)
-    parser.add_argument("-nc", "--numberofboxes", type=int, default=1)
-    parser.add_argument("-o", "--outputdir", type=str, default=outputdir)
-    parser.add_argument("-v", "--video", type=bool, default=video)
-    args = parser.parse_args()
+def InitArgs(imfile, video, outputdir, device, resume=None):
+    class Args:
+        pass
+    
+    args = Args()
+    args.config = r".\rtdetrv2\configs\rtdetrv2\rtdetrv2_r50vd_6x_coco.yml"
+    args.resume = resume if resume else r".\weights\R50_att_C4_best.pth"
+    args.imfile = imfile
+    args.sliced = False
+    args.device = str(device)
+    args.numberofboxes = 1
+    args.outputdir = outputdir
+    args.video = video
     return args

@@ -49,7 +49,7 @@ class DetectorEngine:
     def _ensure_model(self, sample_input_path: str, is_video: bool, output_dir: str):
         if self._model is not None:
             return
-        args = InitArgs(sample_input_path, is_video, output_dir, self.device)
+        args = InitArgs(sample_input_path, is_video, output_dir, self.device, self.model_path)
         self._model = initModel(args)
 
     def _encode_b64_jpg(self, bgr_img):
@@ -215,6 +215,7 @@ class DetectorEngine:
             self._preview_meta = {
                 "status": "running",
                 "frames": 0,
+                "total_frames": 0,
                 "detected_frames": 0,
                 "fps_eff": 0.0,
                 "last_msg": "",
@@ -233,6 +234,7 @@ class DetectorEngine:
             fps = cap.get(cv2.CAP_PROP_FPS)
             if fps is None or fps <= 0:
                 fps = 30.0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             orig_size = torch.tensor([w, h])[None].to(self.device)
@@ -288,11 +290,12 @@ class DetectorEngine:
                     fps_eff = (frames / dt) if dt > 0 else 0.0
 
                     b64 = self._encode_b64_jpg(detect_frame)
-                    msg = f"frames={frames}, detected_frames={detected_frames}, fps≈{fps_eff:.1f}"
+                    msg = f"frames={frames}/{total_frames}, detected_frames={detected_frames}, fps≈{fps_eff:.1f}"
                     self._push_preview((b64, msg))
 
                     with self._preview_meta_lock:
                         self._preview_meta["frames"] = frames
+                        self._preview_meta["total_frames"] = total_frames
                         self._preview_meta["detected_frames"] = detected_frames
                         self._preview_meta["fps_eff"] = fps_eff
                         self._preview_meta["last_msg"] = msg

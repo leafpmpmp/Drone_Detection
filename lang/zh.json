@@ -29,5 +29,19 @@
     "RTMP_title": "RTMP串流",
     "fail_open_rtmp": "無法打開RTMP串流",
     "success_open_rtmp": "成功打開RTMP串流",
-    "fail_read_frame": "無法讀取影片幀"
+    "fail_read_frame": "無法讀取影片幀",
+    "file_selection": "檔案選擇",
+    "choose_file": "選擇圖片/影片",
+    "status_waiting": "狀態: 等待操作",
+    "status_inferring": "狀態: 推理中（即時顯示）",
+    "status_image_completed": "✅ 狀態: 圖片推理完成",
+    "status_cleared": "狀態: 已清除",
+    "error_no_file": "❌ 請先選擇圖片或影片",
+    "error_unsupported_format": "❌ 不支援的檔案格式",
+    "error_generic": "❌ 發生錯誤: {err}",
+    "status_prefix": "狀態: ",
+    "settings_title": "設定",
+    "language_select": "語言選擇",
+    "real_time_render": "即時影像渲染",
+    "conf_threshold": "信心度閥值"
 }

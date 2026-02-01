@@ -1,5 +1,4 @@
 import os
-import base64
 import time
 import asyncio
 import flet as ft
@@ -21,8 +20,8 @@ async def main(page: ft.Page):
     page.title = "無人機人員/異物偵測系統"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.scroll = ft.ScrollMode.AUTO
-    page.window_width = 1000
-    page.window_height = 800
+    page.window.width = 1000
+    page.window.height = 800
 
     detect_status_text = ft.Text("狀態: 等待操作")
 
@@ -40,16 +39,6 @@ async def main(page: ft.Page):
 
     file_picker = ft.FilePicker()
 
-    # page.overlay.append(file_picker)
-
-    def write_preview_jpg_from_b64(b64_str: str) -> str:
-        os.makedirs("uploads", exist_ok=True)
-        raw = base64.b64decode(b64_str)
-        out_path = os.path.join("uploads", f"preview_{int(time.time() * 1000)}.jpg")
-        with open(out_path, "wb") as f:
-            f.write(raw)
-        return out_path
-
     def is_image_file(name: str):
         ext = os.path.splitext(name)[1].lower()
         return ext in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
@@ -57,6 +46,9 @@ async def main(page: ft.Page):
     def is_video_file(name: str):
         ext = os.path.splitext(name)[1].lower()
         return ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]
+
+    def b64_to_data_url(b64_str: str) -> str:
+        return "data:image/jpeg;base64," + b64_str
 
     async def handle_files_pick(e):
         result = await file_picker.pick_files(allow_multiple=True)
@@ -117,49 +109,68 @@ async def main(page: ft.Page):
 
         page.update()
 
-    async def preview_loop():
+    async def inference_stream_loop():
+        ui_interval = 0.10
+        last_ui_ts = 0.0
+        last_b64 = None
+        last_msg = ""
+
         try:
             while True:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
 
                 item = detector.get_latest_preview()
-                if item is None:
-                    meta = detector.get_preview_meta()
-                    if meta.get("status") in ("done", "stopped", "error"):
-                        detect_status_text.value = f"狀態: {meta.get('last_msg', '')}"
-                        if meta.get("status") == "done":
-                            detect_status_text.color = "green"
-                        elif meta.get("status") == "stopped":
-                            detect_status_text.color = "orange"
-                        else:
-                            detect_status_text.color = "red"
+                if item is not None:
+                    b64, msg = item
+
+                    if b64 == "__error__":
+                        detect_status_text.value = f"❌ {msg}"
+                        detect_status_text.color = "red"
                         detect_progress_bar.visible = False
-                        page.update()
+                        detect_status_text.update()
+                        detect_progress_bar.update()
                         return
+
+                    if b64 == "__done__":
+                        detect_status_text.value = f"✅ {msg}"
+                        detect_status_text.color = "green"
+                        detect_progress_bar.visible = False
+                        detect_status_text.update()
+                        detect_progress_bar.update()
+                        return
+
+                    last_b64 = b64
+                    last_msg = msg
+
+                meta = detector.get_preview_meta()
+                if meta.get("status") in ("done", "stopped", "error"):
+                    detect_status_text.value = f"狀態: {meta.get('last_msg', '')}"
+                    if meta.get("status") == "done":
+                        detect_status_text.color = "green"
+                    elif meta.get("status") == "stopped":
+                        detect_status_text.color = "orange"
+                    else:
+                        detect_status_text.color = "red"
+                    detect_progress_bar.visible = False
+                    detect_status_text.update()
+                    detect_progress_bar.update()
+                    return
+
+                if last_b64 is None:
                     continue
 
-                b64, msg = item
+                now = time.time()
+                if now - last_ui_ts < ui_interval:
+                    continue
+                last_ui_ts = now
 
-                if b64 == "__error__":
-                    detect_status_text.value = f"❌ {msg}"
-                    detect_status_text.color = "red"
-                    detect_progress_bar.visible = False
-                    page.update()
-                    return
-
-                if b64 == "__done__":
-                    detect_status_text.value = f"✅ {msg}"
-                    detect_status_text.color = "green"
-                    detect_progress_bar.visible = False
-                    page.update()
-                    return
-
-                img_path = write_preview_jpg_from_b64(b64)
-                detect_image_control.src = img_path
+                detect_image_control.src = b64_to_data_url(last_b64)
                 detect_image_control.visible = True
-                detect_status_text.value = msg
+                detect_status_text.value = last_msg
                 detect_status_text.color = "blue"
-                page.update()
+
+                detect_image_control.update()
+                detect_status_text.update()
 
         except asyncio.CancelledError:
             return
@@ -178,7 +189,7 @@ async def main(page: ft.Page):
         detect_image_control.visible = False
         detect_progress_bar.visible = True
         detect_progress_bar.value = None
-        detect_status_text.value = "狀態: 推理中（即時預覽）"
+        detect_status_text.value = "狀態: 推理中（即時顯示）"
         detect_status_text.color = "blue"
         page.update()
 
@@ -190,10 +201,8 @@ async def main(page: ft.Page):
         if is_image_file(file.name):
             try:
                 b64_img, summary = detector.run_inference(file_path)
-                img_path = write_preview_jpg_from_b64(b64_img)
-                detect_image_control.src = img_path
+                detect_image_control.src = b64_to_data_url(b64_img)
                 detect_image_control.visible = True
-
                 detect_status_text.value = "✅ 狀態: 圖片推理完成"
                 detect_status_text.color = "green"
                 detect_progress_bar.visible = False
@@ -217,7 +226,7 @@ async def main(page: ft.Page):
                     write_video=True,
                 )
                 detect_image_control.visible = True
-                state.preview_task = asyncio.create_task(preview_loop())
+                state.preview_task = asyncio.create_task(inference_stream_loop())
                 page.update()
             except Exception as err:
                 detect_status_text.value = f"❌ 發生錯誤: {str(err)}"

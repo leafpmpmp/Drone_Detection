@@ -30,6 +30,8 @@ class DetectorEngine:
         )
         self.output_root = output_root
         os.makedirs(self.output_root, exist_ok=True)
+        
+        self.lang_data = {}
 
         self._model = None
 
@@ -45,6 +47,12 @@ class DetectorEngine:
             "last_msg": "",
             "out_video_path": "",
         }
+
+    def set_language(self, lang_data: dict):
+        self.lang_data = lang_data
+
+    def _get_text(self, key: str, default: str) -> str:
+        return self.lang_data.get(key, default)
 
     def _ensure_model(self, sample_input_path: str, is_video: bool, output_dir: str):
         if self._model is not None:
@@ -85,7 +93,7 @@ class DetectorEngine:
 
         img = cv2.imread(image_path)
         if img is None:
-            raise RuntimeError("cv2.imread 讀不到圖片（路徑或格式可能有問題）")
+            raise RuntimeError(self._get_text("error_read_image", "cv2.imread 讀不到圖片（路徑或格式可能有問題）"))
 
         h, w = img.shape[:2]
         orig_size = torch.tensor([w, h])[None].to(self.device)
@@ -108,10 +116,10 @@ class DetectorEngine:
         dt = time.time() - t0
 
         summary = []
-        summary.append(f"輸入: {os.path.basename(image_path)}")
-        summary.append(f"偵測到 {int(box_count)} 個目標")
-        summary.append(f"耗時: {dt:.2f} 秒")
-        summary.append(f"輸出圖片: {out_img_path}")
+        summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(image_path)}")
+        summary.append(self._get_text('summary_detected_count', '偵測到 {count} 個目標').format(count=int(box_count)))
+        summary.append(f"{self._get_text('summary_time', '耗時')}: {dt:.2f} s")
+        summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_img_path)}")
 
         return b64_img, "\n".join(summary)
 
@@ -120,7 +128,7 @@ class DetectorEngine:
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            raise RuntimeError("無法開啟影片（編碼或路徑可能有問題）")
+            raise RuntimeError(self._get_text("error_open_video", "無法開啟影片（編碼或路徑可能有問題）"))
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps is None or fps <= 0:
@@ -134,7 +142,7 @@ class DetectorEngine:
         writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
         if not writer.isOpened():
             cap.release()
-            raise RuntimeError("無法建立輸出影片（mp4v/路徑/權限問題）")
+            raise RuntimeError(self._get_text("error_create_video", "無法建立輸出影片（mp4v/路徑/權限問題）"))
 
         orig_size = torch.tensor([w, h])[None].to(self.device)
 
@@ -180,12 +188,12 @@ class DetectorEngine:
             preview_b64 = self._encode_b64_jpg(blank)
 
         summary = []
-        summary.append(f"輸入: {os.path.basename(video_path)}")
-        summary.append(f"總幀數: {frames}")
-        summary.append(f"偵測到目標的幀數: {detected_frames}")
-        summary.append(f"總耗時: {dt:.2f} 秒")
-        summary.append(f"有效 FPS: {fps_eff:.2f}")
-        summary.append(f"輸出影片: {out_video_path}")
+        summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
+        summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
+        summary.append(f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}")
+        summary.append(f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s")
+        summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
+        summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
 
         return preview_b64, "\n".join(summary)
 
@@ -225,10 +233,11 @@ class DetectorEngine:
         def worker():
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
+                msg = self._get_text("error_open_video", "無法開啟影片")
                 with self._preview_meta_lock:
                     self._preview_meta["status"] = "error"
-                    self._preview_meta["last_msg"] = "無法開啟影片"
-                self._push_preview(("__error__", "無法開啟影片"))
+                    self._preview_meta["last_msg"] = msg
+                self._push_preview(("__error__", msg))
                 return
 
             fps = cap.get(cv2.CAP_PROP_FPS)
@@ -247,10 +256,11 @@ class DetectorEngine:
                 writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
                 if not writer.isOpened():
                     cap.release()
+                    msg = self._get_text("error_create_video", "無法建立輸出影片")
                     with self._preview_meta_lock:
                         self._preview_meta["status"] = "error"
-                        self._preview_meta["last_msg"] = "無法建立輸出影片"
-                    self._push_preview(("__error__", "無法建立輸出影片"))
+                        self._preview_meta["last_msg"] = msg
+                    self._push_preview(("__error__", msg))
                     return
 
             t0 = time.time()
@@ -290,7 +300,15 @@ class DetectorEngine:
                     fps_eff = (frames / dt) if dt > 0 else 0.0
 
                     b64 = self._encode_b64_jpg(detect_frame)
-                    msg = f"frames={frames}/{total_frames}, detected_frames={detected_frames}, fps≈{fps_eff:.1f}"
+                    msg = self._get_text(
+                        "real_time_status",
+                        "frames={frames}/{total_frames}, detected_frames={detected_frames}, fps≈{fps}",
+                    ).format(
+                        frames=frames,
+                        total_frames=total_frames,
+                        detected_frames=detected_frames,
+                        fps=f"{fps_eff:.1f}",
+                    )
                     self._push_preview((b64, msg))
 
                     with self._preview_meta_lock:

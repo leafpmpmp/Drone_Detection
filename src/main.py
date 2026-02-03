@@ -56,6 +56,7 @@ state.lang_data = load_language(state.language)
 
 
 async def main(page: ft.Page):
+    detector.set_language(state.lang_data)
     page.title = state.lang_data.get("title", "無人機人員/異物偵測系統")
     page.theme_mode = ft.ThemeMode.LIGHT
     page.scroll = ft.ScrollMode.AUTO
@@ -435,6 +436,7 @@ async def main(page: ft.Page):
         state.language = e.control.value
         print(f"Language changed to: {state.language}")
         state.lang_data = load_language(state.language)
+        detector.set_language(state.lang_data)
         print("Loaded lang data keys:", list(state.lang_data.keys())[:10], "...")
         update_ui_text()
         settings_tab.update()

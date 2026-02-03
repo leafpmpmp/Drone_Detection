@@ -26,29 +26,22 @@ detector = DetectorEngine(r"weights\R50_att_C4_best.pth")
 
 
 def load_language(lang_code="zh"):
-    candidates = [
-        os.path.join(BASE_DIR, "lang", f"{lang_code}.json"),
-        os.path.join(BASE_DIR, "..", "lang", f"{lang_code}.json"),
-    ]
+    # Since we are in src/main.py, the lang folder is at src/lang/
+    path = os.path.join(BASE_DIR, "lang", f"{lang_code}.json")
+    
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        print("LANG PATH not found:", path)
+        return {}
 
-    for path in candidates:
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
-            print("LANG PATH =", path)
-            print("lang file keys:", list(data.keys())[:10], "...")
-            print("title=", data.get("title"))
-            return data
-        except Exception as e:
-            print("LANG PATH =", path)
-            print(f"Error loading language ({lang_code}): {e}")
-            return {}
-
-    print("LANG PATH candidates not found:", candidates)
-    return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        print("LANG PATH =", path)
+        print(f"Error loading language ({lang_code}): {e}")
+        return {}
 
 
 # Initial load

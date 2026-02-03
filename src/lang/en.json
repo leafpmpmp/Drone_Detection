@@ -29,5 +29,20 @@
     "RTMP_title": "RTMP Streaming",
     "fail_open_rtmp": "Failed to open RTMP stream",
     "success_open_rtmp": "Successfully opened RTMP stream",
-    "fail_read_frame": "Failed to read video frame"
+    "fail_read_frame": "Failed to read video frame",
+    "file_selection": "File Selection",
+    "choose_file": "Select Image/Video",
+    "status_waiting": "Status: Waiting for operation",
+    "status_inferring": "Status: Inferring (Real-time display)",
+    "status_image_completed": "✅ Status: Image inference completed",
+    "status_cleared": "Status: Cleared",
+    "error_no_file": "❌ Please select an image or video first",
+    "error_unsupported_format": "❌ Unsupported file format",
+    "error_generic": "❌ Error occurred: {err}",
+    "interrupted_msg": "⏹️ Interrupt sent",
+    "status_prefix": "Status: ",
+    "settings_title": "Settings",
+    "language_select": "Language Selection",
+    "real_time_render": "Real-time Video Rendering",
+    "conf_threshold": "Confidence Threshold"
 }

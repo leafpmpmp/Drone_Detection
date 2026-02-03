@@ -164,3 +164,9 @@ storage/
 
 # Model
 weights/
+
+#data files
+data/
+
+uploads/
+outputFile/

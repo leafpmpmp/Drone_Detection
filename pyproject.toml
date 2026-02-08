@@ -19,6 +19,60 @@ dependencies = [
   "ultralytics>=8.4.6",
 ]
 
+[project.optional-dependencies]
+cpu = [
+  "torch>=2.9.1",
+  "torchvision>=0.24.1",
+]
+xpu = [
+  "torch>=2.9.1",
+  "torchvision>=0.24.1",
+  "pytorch-triton-xpu>=3.5.0 ; sys_platform == 'win32' or sys_platform == 'linux'"
+]
+cu128 = [
+  "torch>=2.9.1",
+  "torchvision>=0.24.1",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "xpu" },
+    { extra = "cu128" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-xpu", extra = "xpu" },
+  { index = "pytorch-cu128", extra = "cu128" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-xpu", extra = "xpu" },
+  { index = "pytorch-cu128", extra = "cu128" },
+]
+pytorch-triton-xpu = [
+  { index = "pytorch-xpu", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [dependency-groups]
 dev = [
   "flet[all]>=0.80.2",

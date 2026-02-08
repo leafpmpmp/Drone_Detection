@@ -23,11 +23,17 @@ class DetectorEngine:
         output_root: str = "outputFile",
     ):
         self.model_path = model_path
-        self.device = (
-            torch.device(device)
-            if device
-            else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        if device:
+            self.device = torch.device(device)
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            self.device = torch.device("xpu")
+        else:
+            self.device = torch.device("cpu")
+        
+        print(f"Detector initialized on device: {self.device}")
+
         self.output_root = output_root
         os.makedirs(self.output_root, exist_ok=True)
         
@@ -59,6 +65,29 @@ class DetectorEngine:
             return
         args = InitArgs(sample_input_path, is_video, output_dir, self.device, self.model_path)
         self._model = initModel(args)
+        # Note: Do NOT use .half() on model here manually! 
+        # We will use autocast for mixed precision.
+
+    def _prepare_input(self, frame_bgr):
+        # Resize on CPU (OpenCV is fast enough and avoids upload overhead for large frames)
+        frame_resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
+        
+        # Upload as uint8 (4x smaller transfer than float32)
+        tensor = torch.from_numpy(frame_resized).permute(2, 0, 1).to(self.device, non_blocking=True)
+        
+        # Normalize on GPU to Float32
+        im_data = tensor.float() / 255.0
+        
+        return im_data.unsqueeze(0)
+
+    def _run_forward(self, im_data, orig_size):
+        # Use autocast to handle mixed precision (Float/Half) automatically
+        if self.device.type != "cpu":
+            # For XPU (and CUDA), use half precision (Float16) where safe
+            with torch.autocast(device_type=self.device.type, dtype=torch.float16):
+                return self._model(im_data, orig_size)
+        else:
+            return self._model(im_data, orig_size)
 
     def _encode_b64_jpg(self, bgr_img):
         ok, buffer = cv2.imencode(".jpg", bgr_img)
@@ -98,14 +127,9 @@ class DetectorEngine:
         h, w = img.shape[:2]
         orig_size = torch.tensor([w, h])[None].to(self.device)
 
-        frame_resized = cv2.resize(img, (640, 640), interpolation=cv2.INTER_LINEAR)
-        im_data = (
-            (torch.from_numpy(frame_resized).permute(2, 0, 1).float() / 255.0)
-            .unsqueeze(0)
-            .to(self.device)
-        )
+        im_data = self._prepare_input(img)
 
-        output = self._model(im_data, orig_size)
+        output = self._run_forward(im_data, orig_size)
         labels, boxes, scores = output
         detect_frame, box_count = draw([img], labels, boxes, scores, 0.35)
 
@@ -129,6 +153,9 @@ class DetectorEngine:
         # Dummy args. is_video=False, sample_input_path="dummy.jpg"
         args = InitArgs("dummy.jpg", False, self.output_root, self.device, self.model_path)
         self._model = initModel(args)
+        # FP16 Optimization
+        if self.device.type != "cpu":
+            self._model.half()
 
     def infer_frame(self, frame_bgr, conf_thres=0.35):
         self.ensure_initialized()
@@ -136,14 +163,9 @@ class DetectorEngine:
         h, w = frame_bgr.shape[:2]
         orig_size = torch.tensor([w, h])[None].to(self.device)
 
-        frame_resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
-        im_data = (
-            (torch.from_numpy(frame_resized).permute(2, 0, 1).float() / 255.0)
-            .unsqueeze(0)
-            .to(self.device)
-        )
+        im_data = self._prepare_input(frame_bgr)
 
-        output = self._model(im_data, orig_size)
+        output = self._run_forward(im_data, orig_size)
         labels, boxes, scores = output
         
         detect_frame, box_count = draw([frame_bgr], labels, boxes, scores, conf_thres)
@@ -181,16 +203,9 @@ class DetectorEngine:
             if not ret:
                 break
 
-            frame_resized = cv2.resize(
-                frame, (640, 640), interpolation=cv2.INTER_LINEAR
-            )
-            im_data = (
-                (torch.from_numpy(frame_resized).permute(2, 0, 1).float() / 255.0)
-                .unsqueeze(0)
-                .to(self.device)
-            )
+            im_data = self._prepare_input(frame)
 
-            output = self._model(im_data, orig_size)
+            output = self._run_forward(im_data, orig_size)
             labels, boxes, scores = output
             detect_frame, box_count = draw([frame], labels, boxes, scores, 0.35)
 
@@ -299,16 +314,9 @@ class DetectorEngine:
                 if not ret:
                     break
 
-                frame_resized = cv2.resize(
-                    frame, (640, 640), interpolation=cv2.INTER_LINEAR
-                )
-                im_data = (
-                    (torch.from_numpy(frame_resized).permute(2, 0, 1).float() / 255.0)
-                    .unsqueeze(0)
-                    .to(self.device)
-                )
+                im_data = self._prepare_input(frame)
 
-                output = self._model(im_data, orig_size)
+                output = self._run_forward(im_data, orig_size)
                 labels, boxes, scores = output
                 detect_frame, box_count = draw([frame], labels, boxes, scores, conf)
 

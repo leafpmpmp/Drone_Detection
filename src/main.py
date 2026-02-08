@@ -8,6 +8,7 @@ import flet as ft
 from dataclasses import dataclass, field
 from inference import DetectorEngine
 from stream import StreamManager
+import torch
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -681,4 +682,5 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
+    print(torch.xpu.is_available())
     ft.run(main=main, upload_dir="uploads")

@@ -31,12 +31,12 @@ class DetectorEngine:
             self.device = torch.device("xpu")
         else:
             self.device = torch.device("cpu")
-        
+
         print(f"Detector initialized on device: {self.device}")
 
         self.output_root = output_root
         os.makedirs(self.output_root, exist_ok=True)
-        
+
         self.lang_data = {}
 
         self._model = None
@@ -63,21 +63,27 @@ class DetectorEngine:
     def _ensure_model(self, sample_input_path: str, is_video: bool, output_dir: str):
         if self._model is not None:
             return
-        args = InitArgs(sample_input_path, is_video, output_dir, self.device, self.model_path)
+        args = InitArgs(
+            sample_input_path, is_video, output_dir, self.device, self.model_path
+        )
         self._model = initModel(args)
-        # Note: Do NOT use .half() on model here manually! 
-        # We will use autocast for mixed precision.
 
     def _prepare_input(self, frame_bgr):
         # Resize on CPU (OpenCV is fast enough and avoids upload overhead for large frames)
-        frame_resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
-        
+        frame_resized = cv2.resize(
+            frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR
+        )
+
         # Upload as uint8 (4x smaller transfer than float32)
-        tensor = torch.from_numpy(frame_resized).permute(2, 0, 1).to(self.device, non_blocking=True)
-        
+        tensor = (
+            torch.from_numpy(frame_resized)
+            .permute(2, 0, 1)
+            .to(self.device, non_blocking=True)
+        )
+
         # Normalize on GPU to Float32
         im_data = tensor.float() / 255.0
-        
+
         return im_data.unsqueeze(0)
 
     def _run_forward(self, im_data, orig_size):
@@ -89,8 +95,10 @@ class DetectorEngine:
         else:
             return self._model(im_data, orig_size)
 
-    def _encode_b64_jpg(self, bgr_img):
-        ok, buffer = cv2.imencode(".jpg", bgr_img)
+    def _encode_b64_jpg(self, bgr_img, jpeg_quality=70):
+        ok, buffer = cv2.imencode(
+            ".jpg", bgr_img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
+        )
         if not ok:
             raise RuntimeError("圖片編碼成 JPG 失敗")
         return base64.b64encode(buffer).decode("utf-8")
@@ -122,7 +130,11 @@ class DetectorEngine:
 
         img = cv2.imread(image_path)
         if img is None:
-            raise RuntimeError(self._get_text("error_read_image", "cv2.imread 讀不到圖片（路徑或格式可能有問題）"))
+            raise RuntimeError(
+                self._get_text(
+                    "error_read_image", "cv2.imread 讀不到圖片（路徑或格式可能有問題）"
+                )
+            )
 
         h, w = img.shape[:2]
         orig_size = torch.tensor([w, h])[None].to(self.device)
@@ -140,10 +152,18 @@ class DetectorEngine:
         dt = time.time() - t0
 
         summary = []
-        summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(image_path)}")
-        summary.append(self._get_text('summary_detected_count', '偵測到 {count} 個目標').format(count=int(box_count)))
+        summary.append(
+            f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(image_path)}"
+        )
+        summary.append(
+            self._get_text("summary_detected_count", "偵測到 {count} 個目標").format(
+                count=int(box_count)
+            )
+        )
         summary.append(f"{self._get_text('summary_time', '耗時')}: {dt:.2f} s")
-        summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_img_path)}")
+        summary.append(
+            f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_img_path)}"
+        )
 
         return b64_img, "\n".join(summary)
 
@@ -151,7 +171,9 @@ class DetectorEngine:
         if self._model is not None:
             return
         # Dummy args. is_video=False, sample_input_path="dummy.jpg"
-        args = InitArgs("dummy.jpg", False, self.output_root, self.device, self.model_path)
+        args = InitArgs(
+            "dummy.jpg", False, self.output_root, self.device, self.model_path
+        )
         self._model = initModel(args)
         # FP16 Optimization
         if self.device.type != "cpu":
@@ -159,7 +181,7 @@ class DetectorEngine:
 
     def infer_frame(self, frame_bgr, conf_thres=0.35):
         self.ensure_initialized()
-        
+
         h, w = frame_bgr.shape[:2]
         orig_size = torch.tensor([w, h])[None].to(self.device)
 
@@ -167,7 +189,7 @@ class DetectorEngine:
 
         output = self._run_forward(im_data, orig_size)
         labels, boxes, scores = output
-        
+
         detect_frame, box_count = draw([frame_bgr], labels, boxes, scores, conf_thres)
         return detect_frame, box_count
 
@@ -176,7 +198,11 @@ class DetectorEngine:
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            raise RuntimeError(self._get_text("error_open_video", "無法開啟影片（編碼或路徑可能有問題）"))
+            raise RuntimeError(
+                self._get_text(
+                    "error_open_video", "無法開啟影片（編碼或路徑可能有問題）"
+                )
+            )
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps is None or fps <= 0:
@@ -190,7 +216,11 @@ class DetectorEngine:
         writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
         if not writer.isOpened():
             cap.release()
-            raise RuntimeError(self._get_text("error_create_video", "無法建立輸出影片（mp4v/路徑/權限問題）"))
+            raise RuntimeError(
+                self._get_text(
+                    "error_create_video", "無法建立輸出影片（mp4v/路徑/權限問題）"
+                )
+            )
 
         orig_size = torch.tensor([w, h])[None].to(self.device)
 
@@ -229,12 +259,18 @@ class DetectorEngine:
             preview_b64 = self._encode_b64_jpg(blank)
 
         summary = []
-        summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
+        summary.append(
+            f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}"
+        )
         summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
-        summary.append(f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}")
+        summary.append(
+            f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}"
+        )
         summary.append(f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s")
         summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
-        summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
+        summary.append(
+            f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}"
+        )
 
         return preview_b64, "\n".join(summary)
 
@@ -253,10 +289,7 @@ class DetectorEngine:
             raise RuntimeError("目前已有預覽推理在進行中，請先 stop_preview()")
 
         uid = str(uuid.uuid4())
-        out_dir = out_dir or os.path.join(self.output_root, uid)
-        os.makedirs(out_dir, exist_ok=True)
-
-        self._ensure_model(video_path, True, out_dir)
+        # 注意：這裡不先建立資料夾，移到 worker 內部判斷
 
         self._stop_event.clear()
 
@@ -272,6 +305,25 @@ class DetectorEngine:
             }
 
         def worker():
+            # 【修改重點】處理變數作用域與邏輯
+            # 使用一個新的變數 current_out_dir 來承接外部的 out_dir，避免 UnboundLocalError
+            current_out_dir = out_dir
+
+            if write_video:
+                # 如果要存檔，才建立資料夾
+                current_out_dir = current_out_dir or os.path.join(self.output_root, uid)
+                os.makedirs(current_out_dir, exist_ok=True)
+            else:
+                # 如果不存檔，就用根目錄當作 dummy path 給 _ensure_model 初始化用
+                current_out_dir = current_out_dir or self.output_root
+
+            # 【修改重點】無論是否 write_video，都要確保模型初始化
+            try:
+                self._ensure_model(video_path, True, current_out_dir)
+            except Exception as e:
+                self._push_preview(("__error__", f"模型初始化失敗: {e}"))
+                return
+
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 msg = self._get_text("error_open_video", "無法開啟影片")
@@ -291,8 +343,10 @@ class DetectorEngine:
 
             writer = None
             out_video_path = ""
+
+            # 只有 write_video 為 True 才建立 Writer
             if write_video:
-                out_video_path = os.path.join(out_dir, "result.mp4")
+                out_video_path = os.path.join(current_out_dir, "result.mp4")
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
                 if not writer.isOpened():
@@ -333,7 +387,18 @@ class DetectorEngine:
                     dt = now - t0
                     fps_eff = (frames / dt) if dt > 0 else 0.0
 
-                    b64 = self._encode_b64_jpg(detect_frame)
+                    preview_frame = detect_frame
+                    ph, pw = preview_frame.shape[:2]
+                    target_w = 960
+                    if pw > target_w:
+                        target_h = int(ph * (target_w / pw))
+                        preview_frame = cv2.resize(
+                            preview_frame,
+                            (target_w, target_h),
+                            interpolation=cv2.INTER_LINEAR,
+                        )
+
+                    b64 = self._encode_b64_jpg(preview_frame, jpeg_quality=70)
                     msg = self._get_text(
                         "real_time_status",
                         "frames={frames}/{total_frames}, detected_frames={detected_frames}, fps≈{fps}",

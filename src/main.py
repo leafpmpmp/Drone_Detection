@@ -12,6 +12,7 @@ import torch
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
 @dataclass
 class State:
     picked_files: list[ft.FilePickerFile] = field(default_factory=list)
@@ -29,7 +30,7 @@ detector = DetectorEngine(r"weights\R50_att_C4_best.pth")
 def load_language(lang_code="zh"):
     # Since we are in src/main.py, the lang folder is at src/lang/
     path = os.path.join(BASE_DIR, "lang", f"{lang_code}.json")
-    
+
     path = os.path.abspath(path)
     if not os.path.exists(path):
         print("LANG PATH not found:", path)
@@ -90,7 +91,7 @@ async def main(page: ft.Page):
     stream_queue = asyncio.Queue()
     stream_running = [False]
     main_loop = asyncio.get_running_loop()
-    
+
     def stream_callback(b64):
         def _safe_update():
             # This runs inside the event loop, so it's safe to touch asyncio.Queue
@@ -108,7 +109,7 @@ async def main(page: ft.Page):
                 main_loop.call_soon_threadsafe(_safe_update)
         except RuntimeError:
             pass
-        
+
     stream_manager = StreamManager(detector, stream_callback)
 
     async def stream_display_loop():
@@ -116,7 +117,7 @@ async def main(page: ft.Page):
         # Throttle UI updates to 15 FPS to prevent freezing
         ui_interval = 1.0 / 15.0
         last_ui_ts = 0.0
-        
+
         try:
             while stream_running[0]:
                 try:
@@ -124,76 +125,82 @@ async def main(page: ft.Page):
                     b64 = await stream_queue.get()
                 except asyncio.CancelledError:
                     break
-                
+
                 if not stream_manager.running:
                     continue
-                
+
                 now = time.time()
                 if now - last_ui_ts < ui_interval:
                     continue
                 last_ui_ts = now
-                
+
                 detect_image_control.src = b64_to_data_url(b64)
                 detect_image_control.src_base64 = None
                 detect_image_control.visible = True
                 detect_image_control.update()
-                
+
                 # print(f"Updated frame at {now}")
-                
+
         except asyncio.CancelledError:
             print("Stream display loop cancelled")
         except Exception as e:
             print(f"Error in display loop: {e}")
 
     stream_url_input = ft.TextField(
-        label="RTSP/RTMP URL", 
-        hint_text="e.g. rtsp://192.168.1.100:8554/cam",
-        width=300
+        label="RTSP/RTMP URL", hint_text="e.g. rtsp://192.168.1.100:8554/cam", width=300
     )
-    
+
     async def click_read_stream(e):
         if not stream_running[0]:
             url = stream_url_input.value
             if not url:
-                detect_status_text.value = state.lang_data.get("error_no_url", "Please input URL")
+                detect_status_text.value = state.lang_data.get(
+                    "error_no_url", "Please input URL"
+                )
                 detect_status_text.color = "red"
                 detect_status_text.update()
                 return
 
             detector.stop_preview()
             detect_image_control.visible = True
-            
+
             stream_manager.set_confidence(state.confidence)
             stream_manager.start(url)
             stream_running[0] = True
-            
-            btn_stream_read.content.value = state.lang_data.get("stop_stream", "Stop Stream")
-            btn_stream_read.style = ft.ButtonStyle(bgcolor=ft.Colors.RED, color=ft.Colors.WHITE)
-            
+
+            btn_stream_read.content.value = state.lang_data.get(
+                "stop_stream", "Stop Stream"
+            )
+            btn_stream_read.style = ft.ButtonStyle(
+                bgcolor=ft.Colors.RED, color=ft.Colors.WHITE
+            )
+
             if state.preview_task:
                 state.preview_task.cancel()
             state.preview_task = asyncio.create_task(stream_display_loop())
-            
+
             detect_status_text.value = f"Streaming: {url}"
             detect_status_text.color = "blue"
             detect_status_text.update()
         else:
             stream_manager.stop()
             stream_running[0] = False
-            btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream")
+            btn_stream_read.content.value = state.lang_data.get(
+                "read_stream", "Read Stream"
+            )
             btn_stream_read.style = None
             detect_status_text.value = "Stream Stopped"
             detect_status_text.update()
-            
+
             if state.preview_task:
                 state.preview_task.cancel()
                 state.preview_task = None
-        
+
         btn_stream_read.update()
 
     btn_stream_read = ft.FilledButton(
         content=ft.Text(state.lang_data.get("read_stream", "Read Stream")),
-        on_click=click_read_stream
+        on_click=click_read_stream,
     )
     # --- End Stream Setup ---
 
@@ -447,7 +454,7 @@ async def main(page: ft.Page):
                     video_path=file_path,
                     conf=state.confidence,
                     ui_stride=3,
-                    write_video=True,
+                    write_video=False,
                 )
                 if state.real_time_render:
                     detect_image_control.visible = True
@@ -526,7 +533,8 @@ async def main(page: ft.Page):
         style=ft.ButtonStyle(bgcolor=ft.Colors.RED, color=ft.Colors.WHITE),
     )
     btn_cleanup = ft.FilledButton(
-        content=ft.Text(state.lang_data.get("cleanup_button", "清理暫存")), on_click=click_clear
+        content=ft.Text(state.lang_data.get("cleanup_button", "清理暫存")),
+        on_click=click_clear,
     )
 
     # Settings controls
@@ -591,11 +599,19 @@ async def main(page: ft.Page):
         nav_settings_dest.label = state.lang_data.get("settings_title", "設定")
 
         file_selection_title.value = state.lang_data.get("file_selection", "檔案選擇")
-        btn_choose_file.content.value = state.lang_data.get("choose_file", "選擇圖片/影片")
+        btn_choose_file.content.value = state.lang_data.get(
+            "choose_file", "選擇圖片/影片"
+        )
         btn_start_infer.content.value = state.lang_data.get("infer_button", "開始推理")
-        btn_stop_infer.content.value = state.lang_data.get("interrupt_inference", "中斷")
+        btn_stop_infer.content.value = state.lang_data.get(
+            "interrupt_inference", "中斷"
+        )
         btn_cleanup.content.value = state.lang_data.get("cleanup_button", "清理暫存")
-        btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream") if not stream_running[0] else state.lang_data.get("stop_stream", "Stop Stream")
+        btn_stream_read.content.value = (
+            state.lang_data.get("read_stream", "Read Stream")
+            if not stream_running[0]
+            else state.lang_data.get("stop_stream", "Stop Stream")
+        )
 
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")

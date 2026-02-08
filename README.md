@@ -1,61 +1,37 @@
 # DroneDetection app
 
+This is the working demonstration system for the paper VRSAR.
+
 ## Run the app
 
 ### uv
 
-Run as a desktop app:
-
+Default Run:
 ```
 uv run flet run
 ```
 
-Run as a web app:
-
+Run with CUDA:
 ```
-uv run flet run --web
-```
-
-For more details on running the app, refer to the [Getting Started Guide](https://docs.flet.dev/).
-
-## Build the app
-
-### Android
-
-```
-flet build apk -v
+uv run --extra cu128 flet run
 ```
 
-For more details on building and signing `.apk` or `.aab`, refer to the [Android Packaging Guide](https://docs.flet.dev/publish/android/).
-
-### iOS
-
+Run with XPU(iGPU):
 ```
-flet build ipa -v
+uv run --extra xpu flet run
 ```
 
-For more details on building and signing `.ipa`, refer to the [iOS Packaging Guide](https://docs.flet.dev/publish/ios/).
+### others
 
-### macOS
-
+Install requirements:
 ```
-flet build macos -v
+pip install -r requirement.txt
 ```
-
-For more details on building macOS package, refer to the [macOS Packaging Guide](https://docs.flet.dev/publish/macos/).
-
-### Linux
-
+Run:
 ```
-flet build linux -v
+python -m flet run
 ```
-
-For more details on building Linux package, refer to the [Linux Packaging Guide](https://docs.flet.dev/publish/linux/).
-
-### Windows
-
+or
 ```
-flet build windows -v
+python ./src/main.py
 ```
-
-For more details on building Windows package, refer to the [Windows Packaging Guide](https://docs.flet.dev/publish/windows/).

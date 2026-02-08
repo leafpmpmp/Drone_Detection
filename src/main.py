@@ -4,6 +4,9 @@ import json
 import asyncio
 import cv2
 import base64
+import shutil
+import zipfile
+from pathlib import Path
 import flet as ft
 from dataclasses import dataclass, field
 from inference import DetectorEngine
@@ -15,6 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 @dataclass
 class State:
     picked_files: list[ft.FilePickerFile] = field(default_factory=list)
+    processed_results: list[dict] = field(default_factory=list)
     preview_task: asyncio.Task | None = None
     language: str = "zh"
     real_time_render: bool = True
@@ -85,6 +89,23 @@ async def main(page: ft.Page):
     detect_result_container = ft.Column()
 
     file_picker = ft.FilePicker()
+    
+    # --- Export UI Setup ---
+    export_ui_row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER)
+
+    def click_export(e):
+        # Placeholder for export action
+        detect_status_text.value = state.lang_data.get("export_not_implemented", "Export logic to be implemented")
+        detect_status_text.update()
+
+    btn_export = ft.FilledButton(
+        content=ft.Text(state.lang_data.get("btn_export", "Export Results")),
+        on_click=click_export,
+        icon=ft.Icons.DOWNLOAD,
+        style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE)
+    )
+    export_ui_row.controls.append(btn_export)
+    # --- End Export UI Setup ---
 
     # --- Stream Setup ---
     stream_queue = asyncio.Queue()
@@ -146,8 +167,8 @@ async def main(page: ft.Page):
             print(f"Error in display loop: {e}")
 
     stream_url_input = ft.TextField(
-        label="RTSP/RTMP URL", 
-        hint_text="e.g. rtsp://192.168.1.100:8554/cam",
+        label=state.lang_data.get("stream_url_label", "RTSP/RTMP URL"), 
+        hint_text=state.lang_data.get("stream_url_hint", "e.g. rtsp://192.168.1.100:8554/cam"),
         width=300
     )
     
@@ -174,7 +195,7 @@ async def main(page: ft.Page):
                 state.preview_task.cancel()
             state.preview_task = asyncio.create_task(stream_display_loop())
             
-            detect_status_text.value = f"Streaming: {url}"
+            detect_status_text.value = f"{state.lang_data.get('status_streaming', 'Streaming')}: {url}"
             detect_status_text.color = "blue"
             detect_status_text.update()
         else:
@@ -182,7 +203,7 @@ async def main(page: ft.Page):
             stream_running[0] = False
             btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream")
             btn_stream_read.style = None
-            detect_status_text.value = "Stream Stopped"
+            detect_status_text.value = state.lang_data.get("status_stream_stopped", "Stream Stopped")
             detect_status_text.update()
             
             if state.preview_task:
@@ -308,7 +329,7 @@ async def main(page: ft.Page):
 
         page.update()
 
-    async def inference_stream_loop():
+    async def inference_stream_loop(progress_prefix=""):
         ui_interval = 0.10
         last_ui_ts = 0.0
         last_b64 = None
@@ -331,7 +352,11 @@ async def main(page: ft.Page):
                         return
 
                     if b64 == "__done__":
-                        detect_status_text.value = f"✅ {msg}"
+                        # Now msg contains full summary
+                        detect_result_container.controls.append(ft.Text(msg, selectable=True))
+                        detect_result_container.update()
+                        
+                        detect_status_text.value = f"✅ Finished"
                         detect_status_text.color = "green"
                         detect_progress_row.visible = False
                         detect_status_text.update()
@@ -349,22 +374,20 @@ async def main(page: ft.Page):
                 if total_frames > 0:
                     val = current_frames / total_frames
                     detect_progress_bar.value = val
-                    detect_progress_text.value = f"{int(val * 100)}%"
+                    
+                    # Update progress text but keep status text clean with our prefix
+                    detect_progress_text.value = f"{int(val * 100)}% ({last_msg})" 
                     detect_progress_row.visible = True
                     detect_progress_row.update()
+                    
+                    # Ensure status text isn't overwritten by raw frame stats
+                    if progress_prefix:
+                        detect_status_text.value = progress_prefix
+                        detect_status_text.update()
 
                 if meta.get("status") in ("done", "stopped", "error"):
-                    prefix = state.lang_data.get("status_prefix", "狀態: ")
-                    detect_status_text.value = f"{prefix}{meta.get('last_msg', '')}"
-                    if meta.get("status") == "done":
-                        detect_status_text.color = "green"
-                    elif meta.get("status") == "stopped":
-                        detect_status_text.color = "orange"
-                    else:
-                        detect_status_text.color = "red"
-                    detect_progress_row.visible = False
-                    detect_status_text.update()
-                    detect_progress_row.update()
+                     # This block acts as a safety if loop continues after termination, 
+                     # but __done__ handler above usually catches it.
                     return
 
                 if last_b64 is None:
@@ -381,10 +404,8 @@ async def main(page: ft.Page):
                     detect_image_control.src_base64 = None
                     detect_image_control.visible = True
                     detect_image_control.update()
-
-                detect_status_text.value = last_msg
-                detect_status_text.color = "blue"
-                detect_status_text.update()
+                
+                # We moved status text update to progress section to avoid flashing
 
         except asyncio.CancelledError:
             return
@@ -398,76 +419,132 @@ async def main(page: ft.Page):
             page.update()
             return
 
-        file = state.picked_files[0]
-        file_path = file.path
-
         detect_result_container.controls.clear()
         detect_image_control.visible = False
         detect_progress_row.visible = True
         detect_progress_bar.value = None
         detect_progress_text.value = "0%"
-        detect_status_text.value = state.lang_data.get(
-            "status_inferring", "狀態: 推理中（即時顯示）"
-        )
+
+        # Reset Results and Hide Export
+        state.processed_results.clear()
+        export_ui_row.visible = False
+        export_ui_row.update()
+        
+        status_template = state.lang_data.get("status_inferring", "狀態: 推理中（即時顯示）")
+        detect_status_text.value = status_template
         detect_status_text.color = "blue"
         page.update()
 
+        # Stop existing preview/task
         if state.preview_task is not None and not state.preview_task.done():
-            detector.stop_preview()
-            state.preview_task.cancel()
-            state.preview_task = None
+            if state.preview_task != asyncio.current_task():
+                detector.stop_preview()
+                state.preview_task.cancel()
+                try:
+                    await state.preview_task
+                except asyncio.CancelledError:
+                    pass
+                state.preview_task = None
 
-        if is_image_file(file.name):
-            try:
-                b64_img, summary = detector.run_inference(file_path)
-                detect_image_control.src = b64_to_data_url(b64_img)
-                detect_image_control.src_base64 = None
-                detect_image_control.visible = True
-                detect_status_text.value = state.lang_data.get(
-                    "status_image_completed", "✅ 狀態: 圖片推理完成"
-                )
-                detect_status_text.color = "green"
-                detect_progress_row.visible = False
-                detect_result_container.controls.append(
-                    ft.Text(summary, selectable=True)
-                )
-                page.update()
-            except Exception as err:
-                detect_status_text.value = state.lang_data.get(
-                    "error_generic", "❌ 發生錯誤: {err}"
-                ).format(err=str(err))
-                detect_status_text.color = "red"
-                detect_progress_row.visible = False
-                page.update()
-            return
+        # Set current task as preview task for cancellation support
+        state.preview_task = asyncio.current_task()
 
-        if is_video_file(file.name):
-            try:
-                detector.start_video_preview(
-                    video_path=file_path,
-                    conf=state.confidence,
-                    ui_stride=3,
-                    write_video=True,
-                )
-                if state.real_time_render:
-                    detect_image_control.visible = True
-                state.preview_task = asyncio.create_task(inference_stream_loop())
-                page.update()
-            except Exception as err:
-                detect_status_text.value = state.lang_data.get(
-                    "error_generic", "❌ 發生錯誤: {err}"
-                ).format(err=str(err))
-                detect_status_text.color = "red"
-                detect_progress_row.visible = False
-                page.update()
-            return
+        total_files = len(state.picked_files)
+        try:
+            for i, file in enumerate(state.picked_files):
+                file_path = file.path
+                
+                # Update status
+                msg = f"{status_template} [{i+1}/{total_files}] {file.name}"
+                detect_status_text.value = msg
+                detect_status_text.update()
+                
+                detect_result_container.controls.append(ft.Text(f"--- File: {file.name} ---", weight=ft.FontWeight.BOLD))
+                
+                if is_image_file(file.name):
+                    try:
+                        # Assuming detector.run_inference returns (b64, summary, out_path)
+                        b64_img, summary, out_img_path = detector.run_inference(file_path)
+                        detect_image_control.src = b64_to_data_url(b64_img)
+                        detect_image_control.src_base64 = None
+                        detect_image_control.visible = True
+                        detect_image_control.update()
+                        
+                        detect_result_container.controls.append(
+                            ft.Text(summary, selectable=True)
+                        )
+                        detect_result_container.update()
 
-        detect_status_text.value = state.lang_data.get(
-            "error_unsupported_format", "❌ 不支援的檔案格式"
-        )
-        detect_status_text.color = "red"
-        detect_progress_row.visible = False
-        page.update()
+                        state.processed_results.append({
+                            "original": file_path,
+                            "output": out_img_path,
+                            "type": "image"
+                        })
+                    except Exception as err:
+                        detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                        detect_status_text.color = "red"
+                        detect_status_text.update()
+                        continue
+
+                elif is_video_file(file.name):
+                    try:
+                        detect_progress_bar.value = 0
+                        detect_progress_text.value = "0%"
+                        detect_progress_row.visible = True
+                        detect_progress_row.update()
+
+                        detector.start_video_preview(
+                            video_path=file_path,
+                            conf=state.confidence,
+                            ui_stride=3,
+                            write_video=True,
+                        )
+                        if state.real_time_render:
+                            detect_image_control.visible = True
+                        
+                        await inference_stream_loop(progress_prefix=msg)
+                        
+                        meta = detector.get_preview_meta()
+                        out_video_path = meta.get("out_video_path", "")
+                        if out_video_path and os.path.exists(out_video_path):
+                             detect_folder = os.path.dirname(out_video_path)
+                             log_path = os.path.join(detect_folder, "detections.log")
+                             
+                             state.processed_results.append({
+                                 "original": file_path,
+                                 "output": out_video_path,
+                                 "log": log_path, 
+                                 "type": "video"
+                             })
+
+                    except Exception as err:
+                        detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                        detect_status_text.color = "red"
+                        detect_status_text.update()
+                else:
+                    detect_result_container.controls.append(ft.Text(f"Unsupported format: {file.name}", color="orange"))
+                    detect_result_container.update()
+
+            detect_status_text.value = state.lang_data.get("status_batch_completed", "✅ 所有檔案處理完成")
+            detect_status_text.color = "green"
+            detect_progress_row.visible = False
+            
+            if state.processed_results:
+                export_ui_row.visible = True
+                export_ui_row.update()
+
+            page.update()
+
+        except asyncio.CancelledError:
+             detect_status_text.value = state.lang_data.get("interrupted_msg", "⏹️ 已送出中斷")
+             detect_status_text.color = "orange"
+             detect_progress_row.visible = False
+             
+             if state.processed_results:
+                export_ui_row.visible = True
+                export_ui_row.update()
+                
+             page.update()
 
     def click_stop(e):
         detector.stop_preview()
@@ -486,13 +563,26 @@ async def main(page: ft.Page):
         if state.preview_task is not None and not state.preview_task.done():
             state.preview_task.cancel()
             state.preview_task = None
+        
+        # Clean up output directory
+        if os.path.exists(detector.output_root):
+            try:
+                shutil.rmtree(detector.output_root)
+                os.makedirs(detector.output_root, exist_ok=True)
+            except Exception as err:
+                print(f"Error cleaning output directory: {err}")
 
+        state.processed_results.clear()
         state.picked_files = []
         preview_container.controls.clear()
         upload_progress.controls.clear()
         detect_result_container.controls.clear()
         detect_image_control.visible = False
         detect_progress_row.visible = False
+        
+        export_ui_row.visible = False
+        export_ui_row.update()
+        
         detect_status_text.value = state.lang_data.get("status_cleared", "狀態: 已清除")
         detect_status_text.color = None
         page.update()
@@ -596,6 +686,10 @@ async def main(page: ft.Page):
         btn_stop_infer.content.value = state.lang_data.get("interrupt_inference", "中斷")
         btn_cleanup.content.value = state.lang_data.get("cleanup_button", "清理暫存")
         btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream") if not stream_running[0] else state.lang_data.get("stop_stream", "Stop Stream")
+        btn_export.content.value = state.lang_data.get("btn_export", "Export Results")
+        
+        stream_url_input.label = state.lang_data.get("stream_url_label", "RTSP/RTMP URL")
+        stream_url_input.hint_text = state.lang_data.get("stream_url_hint", "e.g. rtsp://192.168.1.100:8554/cam")
 
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
@@ -652,6 +746,7 @@ async def main(page: ft.Page):
                 detect_progress_row,
                 detect_image_control,
                 detect_result_container,
+                export_ui_row, # Added export UI at the end
             ],
             scroll=ft.ScrollMode.AUTO,
         ),
@@ -682,5 +777,4 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    print(torch.xpu.is_available())
     ft.run(main=main, upload_dir="uploads")

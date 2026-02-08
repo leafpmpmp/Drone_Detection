@@ -123,6 +123,32 @@ class DetectorEngine:
 
         return b64_img, "\n".join(summary)
 
+    def ensure_initialized(self):
+        if self._model is not None:
+            return
+        # Dummy args. is_video=False, sample_input_path="dummy.jpg"
+        args = InitArgs("dummy.jpg", False, self.output_root, self.device, self.model_path)
+        self._model = initModel(args)
+
+    def infer_frame(self, frame_bgr, conf_thres=0.35):
+        self.ensure_initialized()
+        
+        h, w = frame_bgr.shape[:2]
+        orig_size = torch.tensor([w, h])[None].to(self.device)
+
+        frame_resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
+        im_data = (
+            (torch.from_numpy(frame_resized).permute(2, 0, 1).float() / 255.0)
+            .unsqueeze(0)
+            .to(self.device)
+        )
+
+        output = self._model(im_data, orig_size)
+        labels, boxes, scores = output
+        
+        detect_frame, box_count = draw([frame_bgr], labels, boxes, scores, conf_thres)
+        return detect_frame, box_count
+
     def _infer_video_blocking(self, video_path: str, out_dir: str):
         t0 = time.time()
 

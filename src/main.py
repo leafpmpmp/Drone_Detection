@@ -7,9 +7,9 @@ import base64
 import flet as ft
 from dataclasses import dataclass, field
 from inference import DetectorEngine
+from stream import StreamManager
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 @dataclass
 class State:
@@ -84,6 +84,117 @@ async def main(page: ft.Page):
     detect_result_container = ft.Column()
 
     file_picker = ft.FilePicker()
+
+    # --- Stream Setup ---
+    stream_queue = asyncio.Queue()
+    stream_running = [False]
+    main_loop = asyncio.get_running_loop()
+    
+    def stream_callback(b64):
+        def _safe_update():
+            # This runs inside the event loop, so it's safe to touch asyncio.Queue
+            if stream_queue.qsize() > 1:
+                try:
+                    # Clear old frames to always show the newest
+                    while not stream_queue.empty():
+                        stream_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            stream_queue.put_nowait(b64)
+
+        try:
+            if main_loop and main_loop.is_running():
+                main_loop.call_soon_threadsafe(_safe_update)
+        except RuntimeError:
+            pass
+        
+    stream_manager = StreamManager(detector, stream_callback)
+
+    async def stream_display_loop():
+        print("Starting stream display loop")
+        # Throttle UI updates to 15 FPS to prevent freezing
+        ui_interval = 1.0 / 15.0
+        last_ui_ts = 0.0
+        
+        try:
+            while stream_running[0]:
+                try:
+                    # Wait for next frame
+                    b64 = await stream_queue.get()
+                except asyncio.CancelledError:
+                    break
+                
+                if not stream_manager.running:
+                    continue
+                
+                now = time.time()
+                if now - last_ui_ts < ui_interval:
+                    continue
+                last_ui_ts = now
+                
+                detect_image_control.src = b64_to_data_url(b64)
+                detect_image_control.src_base64 = None
+                detect_image_control.visible = True
+                detect_image_control.update()
+                
+                # print(f"Updated frame at {now}")
+                
+        except asyncio.CancelledError:
+            print("Stream display loop cancelled")
+        except Exception as e:
+            print(f"Error in display loop: {e}")
+
+    stream_url_input = ft.TextField(
+        label="RTSP/RTMP URL", 
+        hint_text="e.g. rtsp://192.168.1.100:8554/cam",
+        width=300
+    )
+    
+    async def click_read_stream(e):
+        if not stream_running[0]:
+            url = stream_url_input.value
+            if not url:
+                detect_status_text.value = state.lang_data.get("error_no_url", "Please input URL")
+                detect_status_text.color = "red"
+                detect_status_text.update()
+                return
+
+            detector.stop_preview()
+            detect_image_control.visible = True
+            
+            stream_manager.set_confidence(state.confidence)
+            stream_manager.start(url)
+            stream_running[0] = True
+            
+            btn_stream_read.content.value = state.lang_data.get("stop_stream", "Stop Stream")
+            btn_stream_read.style = ft.ButtonStyle(bgcolor=ft.Colors.RED, color=ft.Colors.WHITE)
+            
+            if state.preview_task:
+                state.preview_task.cancel()
+            state.preview_task = asyncio.create_task(stream_display_loop())
+            
+            detect_status_text.value = f"Streaming: {url}"
+            detect_status_text.color = "blue"
+            detect_status_text.update()
+        else:
+            stream_manager.stop()
+            stream_running[0] = False
+            btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream")
+            btn_stream_read.style = None
+            detect_status_text.value = "Stream Stopped"
+            detect_status_text.update()
+            
+            if state.preview_task:
+                state.preview_task.cancel()
+                state.preview_task = None
+        
+        btn_stream_read.update()
+
+    btn_stream_read = ft.FilledButton(
+        content=ft.Text(state.lang_data.get("read_stream", "Read Stream")),
+        on_click=click_read_stream
+    )
+    # --- End Stream Setup ---
 
     def is_image_file(name: str):
         ext = os.path.splitext(name)[1].lower()
@@ -399,22 +510,22 @@ async def main(page: ft.Page):
         weight=ft.FontWeight.BOLD,
     )
     btn_choose_file = ft.FilledButton(
-        content=state.lang_data.get("choose_file", "選擇圖片/影片"),
+        content=ft.Text(state.lang_data.get("choose_file", "選擇圖片/影片")),
         icon=ft.Icons.UPLOAD_FILE,
         on_click=handle_files_pick,
     )
     btn_start_infer = ft.FilledButton(
-        state.lang_data.get("infer_button", "開始推理"),
+        content=ft.Text(state.lang_data.get("infer_button", "開始推理")),
         on_click=click_start_inference,
         style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
     )
     btn_stop_infer = ft.FilledButton(
-        state.lang_data.get("interrupt_inference", "中斷"),
+        content=ft.Text(state.lang_data.get("interrupt_inference", "中斷")),
         on_click=click_stop,
         style=ft.ButtonStyle(bgcolor=ft.Colors.RED, color=ft.Colors.WHITE),
     )
     btn_cleanup = ft.FilledButton(
-        state.lang_data.get("cleanup_button", "清理暫存"), on_click=click_clear
+        content=ft.Text(state.lang_data.get("cleanup_button", "清理暫存")), on_click=click_clear
     )
 
     # Settings controls
@@ -463,6 +574,8 @@ async def main(page: ft.Page):
     def on_conf_change(e):
         state.confidence = e.control.value
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
+        if stream_running[0]:
+            stream_manager.set_confidence(state.confidence)
         page.update()
 
     conf_slider = ft.Slider(
@@ -477,10 +590,11 @@ async def main(page: ft.Page):
         nav_settings_dest.label = state.lang_data.get("settings_title", "設定")
 
         file_selection_title.value = state.lang_data.get("file_selection", "檔案選擇")
-        btn_choose_file.content = state.lang_data.get("choose_file", "選擇圖片/影片")
-        btn_start_infer.content = state.lang_data.get("infer_button", "開始推理")
-        btn_stop_infer.content = state.lang_data.get("interrupt_inference", "中斷")
-        btn_cleanup.content = state.lang_data.get("cleanup_button", "清理暫存")
+        btn_choose_file.content.value = state.lang_data.get("choose_file", "選擇圖片/影片")
+        btn_start_infer.content.value = state.lang_data.get("infer_button", "開始推理")
+        btn_stop_infer.content.value = state.lang_data.get("interrupt_inference", "中斷")
+        btn_cleanup.content.value = state.lang_data.get("cleanup_button", "清理暫存")
+        btn_stream_read.content.value = state.lang_data.get("read_stream", "Read Stream") if not stream_running[0] else state.lang_data.get("stop_stream", "Stop Stream")
 
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
@@ -516,7 +630,14 @@ async def main(page: ft.Page):
         content=ft.Column(
             [
                 file_selection_title,
-                btn_choose_file,
+                ft.Row(
+                    [
+                        btn_choose_file,
+                        stream_url_input,
+                        btn_stream_read,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
                 preview_container,
                 upload_progress,
                 ft.Row(

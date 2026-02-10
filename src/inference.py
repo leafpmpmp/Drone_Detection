@@ -54,6 +54,10 @@ class DetectorEngine:
             "out_video_path": "",
         }
 
+    def set_output_root(self, new_root: str):
+        self.output_root = new_root
+        os.makedirs(self.output_root, exist_ok=True)
+
     def set_language(self, lang_data: dict):
         self.lang_data = lang_data
 

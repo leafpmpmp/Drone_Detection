@@ -23,6 +23,8 @@ class State:
     language: str = "zh"
     real_time_render: bool = True
     confidence: float = 0.35
+    use_custom_path: bool = False
+    custom_output_path: str = os.path.abspath(r"outputFile")
     lang_data: dict = field(default_factory=dict)
 
 
@@ -77,7 +79,20 @@ async def main(page: ft.Page):
         visible=False,
     )
 
-    preview_container = ft.Column(spacing=10, height=160, scroll=ft.ScrollMode.AUTO)
+    preview_list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
+    preview_placeholder = ft.Container(
+        content=ft.Text(state.lang_data.get("no_file_selected", "尚未選擇檔案"), color=ft.Colors.GREY_400),
+        alignment=ft.Alignment(0, 0),
+    )
+
+    preview_container = ft.Container(
+        content=preview_placeholder,
+        height=160,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        border_radius=8,
+        padding=10,
+    )
+
     upload_progress = ft.Column()
     detect_progress_bar = ft.ProgressBar(width=500, value=0)
     detect_progress_text = ft.Text("0%")
@@ -88,8 +103,10 @@ async def main(page: ft.Page):
     )
     detect_result_container = ft.Column()
 
-    file_picker = ft.FilePicker()
-    
+    file_picker = ft.FilePicker()       
+    folder_picker = ft.FilePicker()
+    # ---------------------------------------
+
     # --- Export UI Setup ---
     export_ui_row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER)
 
@@ -252,7 +269,7 @@ async def main(page: ft.Page):
         if not result:
             return
         state.picked_files = result
-        preview_container.controls.clear()
+        preview_list.controls.clear()
         upload_progress.controls.clear()
 
         for f in result:
@@ -325,8 +342,9 @@ async def main(page: ft.Page):
                 border_radius=10,
                 bgcolor=ft.Colors.WHITE,
             )
-            preview_container.controls.append(preview_row)
+            preview_list.controls.append(preview_row)
 
+        preview_container.content = preview_list
         page.update()
 
     async def inference_stream_loop(progress_prefix=""):
@@ -344,7 +362,7 @@ async def main(page: ft.Page):
                     b64, msg = item
 
                     if b64 == "__error__":
-                        detect_status_text.value = f"❌ {msg}"
+                        detect_status_text.value = f"✗ {msg}"
                         detect_status_text.color = "red"
                         detect_progress_row.visible = False
                         detect_status_text.update()
@@ -356,7 +374,7 @@ async def main(page: ft.Page):
                         detect_result_container.controls.append(ft.Text(msg, selectable=True))
                         detect_result_container.update()
                         
-                        detect_status_text.value = f"✅ Finished"
+                        detect_status_text.value = state.lang_data.get("status_finished", "✓ Finished")
                         detect_status_text.color = "green"
                         detect_progress_row.visible = False
                         detect_status_text.update()
@@ -413,12 +431,33 @@ async def main(page: ft.Page):
     async def click_start_inference(e):
         if not state.picked_files:
             detect_status_text.value = state.lang_data.get(
-                "error_no_file", "❌ 請先選擇圖片或影片"
+                "error_no_file", "✗ 請先選擇圖片或影片"
             )
             detect_status_text.color = "red"
             page.update()
-            return
-
+            return        
+        # --- Handle Custom Output Path ---
+        target_root = "outputFile"
+        if state.use_custom_path:
+            path_val = state.custom_output_path
+            if not path_val or not os.path.exists(path_val):
+                 # 2. Show warning if path invalid
+                 detect_status_text.value = state.lang_data.get(
+                     "error_invalid_path", "❌ Invalid custom output path"
+                 )
+                 detect_status_text.color = "red"
+                 detect_status_text.update()
+                 return
+            target_root = os.path.abspath(path_val)
+        
+        try:
+             detector.set_output_root(target_root)
+        except Exception as err:
+             detect_status_text.value = f"❌ Error setting output path: {err}"
+             detect_status_text.color = "red"
+             detect_status_text.update()
+             return
+        # --------------------------------
         detect_result_container.controls.clear()
         detect_image_control.visible = False
         detect_progress_row.visible = True
@@ -465,11 +504,24 @@ async def main(page: ft.Page):
                     try:
                         # Assuming detector.run_inference returns (b64, summary, out_path)
                         b64_img, summary, out_img_path = detector.run_inference(file_path)
-                        detect_image_control.src = b64_to_data_url(b64_img)
+                        
+                        # Update the main preview image
+                        data_url = b64_to_data_url(b64_img)
+                        detect_image_control.src = data_url
                         detect_image_control.src_base64 = None
                         detect_image_control.visible = True
                         detect_image_control.update()
                         
+                        # Append image result to the results list
+                        detect_result_container.controls.append(
+                            ft.Image(
+                                src=data_url,
+                                width=600,
+                                fit=ft.BoxFit.CONTAIN,
+                                border_radius=8
+                            )
+                        )
+
                         detect_result_container.controls.append(
                             ft.Text(summary, selectable=True)
                         )
@@ -481,7 +533,7 @@ async def main(page: ft.Page):
                             "type": "image"
                         })
                     except Exception as err:
-                        detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                        detect_status_text.value = state.lang_data.get("error_generic", "✗ 發生錯誤: {err}").format(err=str(err))
                         detect_status_text.color = "red"
                         detect_status_text.update()
                         continue
@@ -518,14 +570,17 @@ async def main(page: ft.Page):
                              })
 
                     except Exception as err:
-                        detect_status_text.value = state.lang_data.get("error_generic", "❌ 發生錯誤: {err}").format(err=str(err))
+                        detect_status_text.value = state.lang_data.get("error_generic", "✗ 發生錯誤: {err}").format(err=str(err))
                         detect_status_text.color = "red"
                         detect_status_text.update()
                 else:
-                    detect_result_container.controls.append(ft.Text(f"Unsupported format: {file.name}", color="orange"))
+                    msg = state.lang_data.get(
+                        "error_unsupported_format", "✗ Unsupported format: {file}"
+                    ).format(file=file.name)
+                    detect_result_container.controls.append(ft.Text(msg, color="orange"))
                     detect_result_container.update()
 
-            detect_status_text.value = state.lang_data.get("status_batch_completed", "✅ 所有檔案處理完成")
+            detect_status_text.value = state.lang_data.get("status_batch_completed", "✓ 所有檔案處理完成")
             detect_status_text.color = "green"
             detect_progress_row.visible = False
             
@@ -536,7 +591,7 @@ async def main(page: ft.Page):
             page.update()
 
         except asyncio.CancelledError:
-             detect_status_text.value = state.lang_data.get("interrupted_msg", "⏹️ 已送出中斷")
+             detect_status_text.value = state.lang_data.get("interrupted_msg", "⚠ 已送出中斷")
              detect_status_text.color = "orange"
              detect_progress_row.visible = False
              
@@ -546,13 +601,20 @@ async def main(page: ft.Page):
                 
              page.update()
 
+    async def handle_folder_pick(e):
+        result = await folder_picker.get_directory_path()
+        if not result:
+            return
+        state.custom_output_path = result
+        txt_custom_path.value = result
+    
     def click_stop(e):
         detector.stop_preview()
         if state.preview_task is not None and not state.preview_task.done():
             state.preview_task.cancel()
             state.preview_task = None
         detect_status_text.value = state.lang_data.get(
-            "interrupted_msg", "⏹️ 已送出中斷"
+            "interrupted_msg", "⚠ 已送出中斷"
         )
         detect_status_text.color = "orange"
         detect_progress_row.visible = False
@@ -574,7 +636,11 @@ async def main(page: ft.Page):
 
         state.processed_results.clear()
         state.picked_files = []
-        preview_container.controls.clear()
+        
+        # Reset preview
+        preview_list.controls.clear()
+        preview_container.content = preview_placeholder
+        
         upload_progress.controls.clear()
         detect_result_container.controls.clear()
         detect_image_control.visible = False
@@ -674,6 +740,40 @@ async def main(page: ft.Page):
     )
     conf_slider.on_change = on_conf_change
 
+    # --- Custom Output Path Controls ---
+    def on_path_toggle(e):
+        state.use_custom_path = e.control.value
+        txt_custom_path.disabled = not state.use_custom_path
+        btn_select_folder.disabled = not state.use_custom_path
+        settings_tab.update()
+
+    def on_path_change(e):
+        # 3. Only update state, don't set detector root immediately
+        state.custom_output_path = e.control.value
+
+    switch_custom_path = ft.Switch(
+        label=state.lang_data.get("use_custom_path", "自訂輸出路徑"),
+        value=state.use_custom_path,
+        on_change=on_path_toggle
+    )
+    
+    txt_custom_path = ft.TextField(
+        value=state.custom_output_path,
+        disabled=not state.use_custom_path,
+        expand=True,
+        on_change=on_path_change,
+        hint_text="Output Path"
+    )
+    
+    btn_select_folder = ft.IconButton(
+        icon=ft.Icons.FOLDER_OPEN,
+        disabled=not state.use_custom_path,
+        on_click=handle_folder_pick
+    )
+    
+    row_custom_path = ft.Row([txt_custom_path, btn_select_folder])
+    # -----------------------------------
+
     def update_ui_text():
         page.title = state.lang_data.get("title", "無人機人員/異物偵測系統")
 
@@ -691,9 +791,12 @@ async def main(page: ft.Page):
         stream_url_input.label = state.lang_data.get("stream_url_label", "RTSP/RTMP URL")
         stream_url_input.hint_text = state.lang_data.get("stream_url_hint", "e.g. rtsp://192.168.1.100:8554/cam")
 
+        preview_placeholder.content.value = state.lang_data.get("no_file_selected", "尚未選擇檔案")
+
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
+        switch_custom_path.label = state.lang_data.get("use_custom_path", "自訂輸出路徑")
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
         detect_status_text.value = state.lang_data.get(
             "status_waiting", "狀態: 等待操作"
@@ -715,6 +818,9 @@ async def main(page: ft.Page):
                 ft.Divider(),
                 conf_slider_label,
                 conf_slider,
+                ft.Divider(),
+                switch_custom_path,
+                row_custom_path,
             ],
             scroll=ft.ScrollMode.AUTO,
         ),
@@ -731,7 +837,7 @@ async def main(page: ft.Page):
                         stream_url_input,
                         btn_stream_read,
                     ],
-                    vertical_alignment=ft.CrossAxisAlignment.START,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 preview_container,
                 upload_progress,
@@ -777,4 +883,4 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.run(main=main, upload_dir="uploads")
+    ft.run(main=main, assets_dir="assets", upload_dir="uploads")

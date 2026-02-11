@@ -891,6 +891,14 @@ async def main(page: ft.Page):
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
         theme_select_label.value = state.lang_data.get("theme_select", "Theme Mode")
+        
+        # Update theme dropdown options
+        theme_dropdown.options = [
+            ft.DropdownOption(key="light", text=state.lang_data.get("theme_light", "Light")),
+            ft.DropdownOption(key="dark", text=state.lang_data.get("theme_dark", "Dark")),
+            ft.DropdownOption(key="system", text=state.lang_data.get("theme_system", "System")),
+        ]
+        
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
         switch_custom_path.label = state.lang_data.get("use_custom_path", "自訂輸出路徑")
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"

@@ -1,6 +1,7 @@
 # DroneDetection app
 
-This is the working demonstration system for the paper VRSAR.
+This is the working demonstration system for the SIGIR 2026 DEMO Paper VRSAR.
+We present VRSAR, a lightweight, fully offline visual recognition system designed for real-time victim detection in the field. 
 
 ## Run the app
 

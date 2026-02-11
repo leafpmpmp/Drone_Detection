@@ -54,6 +54,10 @@ class DetectorEngine:
             "out_video_path": "",
         }
 
+    def set_output_root(self, new_root: str):
+        self.output_root = new_root
+        os.makedirs(self.output_root, exist_ok=True)
+
     def set_language(self, lang_data: dict):
         self.lang_data = lang_data
 
@@ -145,7 +149,7 @@ class DetectorEngine:
         summary.append(f"{self._get_text('summary_time', '耗時')}: {dt:.2f} s")
         summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_img_path)}")
 
-        return b64_img, "\n".join(summary)
+        return b64_img, "\n".join(summary), out_img_path
 
     def ensure_initialized(self):
         if self._model is not None:
@@ -236,7 +240,7 @@ class DetectorEngine:
         summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
         summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
 
-        return preview_b64, "\n".join(summary)
+        return preview_b64, "\n".join(summary), out_video_path
 
     def start_video_preview(
         self,
@@ -269,6 +273,8 @@ class DetectorEngine:
                 "fps_eff": 0.0,
                 "last_msg": "",
                 "out_video_path": "",
+                "width": 0,
+                "height": 0,
             }
 
         def worker():
@@ -288,21 +294,48 @@ class DetectorEngine:
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             orig_size = torch.tensor([w, h])[None].to(self.device)
+            
+            with self._preview_meta_lock:
+                self._preview_meta["width"] = w
+                self._preview_meta["height"] = h
 
             writer = None
             out_video_path = ""
+            log_f = None
             if write_video:
                 out_video_path = os.path.join(out_dir, "result.mp4")
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                
+                # 1. Try H.264 (avc1) - Standard for web/apps
+                fourcc = cv2.VideoWriter_fourcc(*"avc1")
                 writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+                
+                if not writer.isOpened():
+                    print("[DetectorEngine] avc1 failed. Trying mp4v (compatible fallback)...")
+                    # 2. Try mp4v - Commonly available but strictly legacy
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+
+                if not writer.isOpened():
+                     print("[DetectorEngine] mp4v failed. Trying hevc (H.265)...")
+                     # 3. Try hevc - Newer, might work if user has HEVC extensions
+                     fourcc = cv2.VideoWriter_fourcc(*"hevc")
+                     writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+                
                 if not writer.isOpened():
                     cap.release()
-                    msg = self._get_text("error_create_video", "無法建立輸出影片")
+                    msg = self._get_text("error_create_video", "無法建立輸出影片(Codecs failed)")
                     with self._preview_meta_lock:
                         self._preview_meta["status"] = "error"
                         self._preview_meta["last_msg"] = msg
                     self._push_preview(("__error__", msg))
                     return
+                
+                log_path = os.path.join(out_dir, "detections.log")
+                try:
+                    log_f = open(log_path, "w", encoding="utf-8")
+                    log_f.write("Frame,Time(s),Detected_Count\n")
+                except Exception as e:
+                    print(f"Failed to create log file: {e}")
 
             t0 = time.time()
             last_ui_t = time.time()
@@ -325,6 +358,9 @@ class DetectorEngine:
 
                 if writer is not None:
                     writer.write(detect_frame)
+                    if log_f is not None and box_count > 0:
+                        ts = frames / fps if fps > 0 else 0
+                        log_f.write(f"{frames},{ts:.2f},{box_count}\n")
 
                 frames += 1
 
@@ -358,16 +394,34 @@ class DetectorEngine:
             cap.release()
             if writer is not None:
                 writer.release()
+            if log_f is not None:
+                log_f.close()
+
+            dt = time.time() - t0
+            fps_eff = (frames / dt) if dt > 0 else 0.0
 
             status = "stopped" if self._stop_event.is_set() else "done"
+            
+            # Generate full summary similar to _infer_video_blocking
+            summary = []
+            summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
+            summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
+            summary.append(f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}")
+            summary.append(f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s")
+            summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
+            if write_video:
+                summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
+
+            full_summary_text = "\n".join(summary)
+
             with self._preview_meta_lock:
                 self._preview_meta["status"] = status
-                self._preview_meta["last_msg"] = (
-                    "已中斷" if status == "stopped" else "完成"
-                )
+                self._preview_meta["last_msg"] = full_summary_text  # Store full summary here for retrieval if needed
                 self._preview_meta["out_video_path"] = out_video_path
 
-            self._push_preview(("__done__", self._preview_meta["last_msg"]))
+            # Send __done__ with full summary payload
+            self._push_preview(("__done__", full_summary_text))
+
 
         self._preview_thread = threading.Thread(target=worker, daemon=True)
         self._preview_thread.start()

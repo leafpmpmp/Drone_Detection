@@ -17,6 +17,7 @@ dependencies = [
   "scipy",
   "tqdm",
   "ultralytics>=8.4.6",
+  "flet-video",
 ]
 
 [project.optional-dependencies]

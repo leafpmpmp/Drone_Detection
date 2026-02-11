@@ -8,12 +8,23 @@ import shutil
 import zipfile
 from pathlib import Path
 import flet as ft
+import flet_video as ftv
 from dataclasses import dataclass, field
 from inference import DetectorEngine
 from stream import StreamManager
 import torch
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Add the directory containing main.py (src/) to the DLL search path and system PATH.
+# This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
+if os.name == "nt":
+    os.environ["PATH"] = BASE_DIR + os.pathsep + os.environ["PATH"]
+    if hasattr(os, "add_dll_directory"):
+        try:
+            os.add_dll_directory(BASE_DIR)
+        except Exception:
+            pass
 
 @dataclass
 class State:
@@ -25,18 +36,16 @@ class State:
     confidence: float = 0.35
     use_custom_path: bool = False
     custom_output_path: str = os.path.abspath(r"outputFile")
+    theme_mode: str = "system"
     lang_data: dict = field(default_factory=dict)
-
 
 state = State()
 detector = DetectorEngine(r"weights\R50_att_C4_best.pth")
 
 
 def load_language(lang_code="zh"):
-    # Since we are in src/main.py, the lang folder is at src/lang/
-    path = os.path.join(BASE_DIR, "lang", f"{lang_code}.json")
-    
-    path = os.path.abspath(path)
+    path = os.path.abspath(os.path.join(BASE_DIR, "lang", f"{lang_code}.json"))
+
     if not os.path.exists(path):
         print("LANG PATH not found:", path)
         return {}
@@ -50,17 +59,24 @@ def load_language(lang_code="zh"):
         print(f"Error loading language ({lang_code}): {e}")
         return {}
 
-
-# Initial load
 state.lang_data = load_language(state.language)
 
 
 async def main(page: ft.Page):
     detector.set_language(state.lang_data)
     page.title = state.lang_data.get("title", "無人機人員/異物偵測系統")
-    page.theme_mode = ft.ThemeMode.LIGHT
+    
+    # Set initial theme
+    if state.theme_mode == "system":
+        page.theme_mode = ft.ThemeMode.SYSTEM
+    elif state.theme_mode == "dark":
+        page.theme_mode = ft.ThemeMode.DARK
+    else:
+        page.theme_mode = ft.ThemeMode.LIGHT
+        
     page.scroll = ft.ScrollMode.AUTO
     page.window.width = 1000
+
     page.window.height = 800
 
     detect_status_text = ft.Text(
@@ -88,7 +104,7 @@ async def main(page: ft.Page):
     preview_container = ft.Container(
         content=preview_placeholder,
         height=160,
-        border=ft.border.all(1, ft.Colors.GREY_300),
+        border=ft.Border.all(1, ft.Colors.GREY_300),
         border_radius=8,
         padding=10,
     )
@@ -186,7 +202,8 @@ async def main(page: ft.Page):
     stream_url_input = ft.TextField(
         label=state.lang_data.get("stream_url_label", "RTSP/RTMP URL"), 
         hint_text=state.lang_data.get("stream_url_hint", "e.g. rtsp://192.168.1.100:8554/cam"),
-        width=300
+        width=300,
+        border_color=ft.Colors.OUTLINE,
     )
     
     async def click_read_stream(e):
@@ -338,9 +355,10 @@ async def main(page: ft.Page):
             preview_row = ft.Container(
                 content=ft.Row([thumbnail, file_info], spacing=15),
                 padding=10,
-                border=ft.Border.all(1, ft.Colors.GREY_300),
+                border=ft.Border.all(1, ft.Colors.OUTLINE),
                 border_radius=10,
-                bgcolor=ft.Colors.WHITE,
+                # Remove hardcoded white background so it adapts to dark mode
+                # bgcolor=ft.Colors.WHITE, 
             )
             preview_list.controls.append(preview_row)
 
@@ -371,15 +389,12 @@ async def main(page: ft.Page):
 
                     if b64 == "__done__":
                         # Now msg contains full summary
-                        detect_result_container.controls.append(ft.Text(msg, selectable=True))
-                        detect_result_container.update()
-                        
                         detect_status_text.value = state.lang_data.get("status_finished", "✓ Finished")
                         detect_status_text.color = "green"
                         detect_progress_row.visible = False
                         detect_status_text.update()
                         detect_progress_row.update()
-                        return
+                        return msg
 
                     last_b64 = b64
                     last_msg = msg
@@ -404,9 +419,20 @@ async def main(page: ft.Page):
                         detect_status_text.update()
 
                 if meta.get("status") in ("done", "stopped", "error"):
-                     # This block acts as a safety if loop continues after termination, 
-                     # but __done__ handler above usually catches it.
-                    return
+                     # If we missed the __done__ message in the queue but status is done/stopped,
+                     # we should still return the summary from meta to ensure result is shown.
+                     detect_progress_row.visible = False
+                     detect_progress_row.update()
+                     
+                     if meta.get("status") == "done":
+                         detect_status_text.value = state.lang_data.get("status_finished", "✓ Finished")
+                         detect_status_text.color = "green"
+                         detect_status_text.update()
+                         return meta.get("last_msg", "")
+                     elif meta.get("status") == "stopped":
+                         return meta.get("last_msg", "")
+                     else:
+                         return None
 
                 if last_b64 is None:
                     continue
@@ -443,7 +469,7 @@ async def main(page: ft.Page):
             if not path_val or not os.path.exists(path_val):
                  # 2. Show warning if path invalid
                  detect_status_text.value = state.lang_data.get(
-                     "error_invalid_path", "❌ Invalid custom output path"
+                     "error_invalid_path", "✗ Invalid custom output path"
                  )
                  detect_status_text.color = "red"
                  detect_status_text.update()
@@ -453,7 +479,7 @@ async def main(page: ft.Page):
         try:
              detector.set_output_root(target_root)
         except Exception as err:
-             detect_status_text.value = f"❌ Error setting output path: {err}"
+             detect_status_text.value = f"✗ Error setting output path: {err}"
              detect_status_text.color = "red"
              detect_status_text.update()
              return
@@ -533,6 +559,8 @@ async def main(page: ft.Page):
                             "type": "image"
                         })
                     except Exception as err:
+                        import traceback
+                        traceback.print_exc()
                         detect_status_text.value = state.lang_data.get("error_generic", "✗ 發生錯誤: {err}").format(err=str(err))
                         detect_status_text.color = "red"
                         detect_status_text.update()
@@ -554,14 +582,42 @@ async def main(page: ft.Page):
                         if state.real_time_render:
                             detect_image_control.visible = True
                         
-                        await inference_stream_loop(progress_prefix=msg)
+                        summary_text = await inference_stream_loop(progress_prefix=msg)
                         
                         meta = detector.get_preview_meta()
                         out_video_path = meta.get("out_video_path", "")
+                        
                         if out_video_path and os.path.exists(out_video_path):
                              detect_folder = os.path.dirname(out_video_path)
                              log_path = os.path.join(detect_folder, "detections.log")
                              
+                             # Convert to absolute path first, then to file URI for reliable playback
+                             try:
+                                abs_video_path = os.path.abspath(out_video_path)
+                                video_uri = Path(abs_video_path).as_uri()
+                             except Exception as e:
+                                print(f"URI conversion failed: {e}")
+                                video_uri = out_video_path
+
+                             # Add Video Player
+                             video_w = meta.get("width", 640)
+                             video_h = meta.get("height", 480)
+                             aspect = video_w / video_h if video_h > 0 else 16/9
+
+                             detect_result_container.controls.append(
+                                 ft.Text(f"--- Video Result: {file.name} ---", weight=ft.FontWeight.BOLD)
+                             )
+                             detect_result_container.controls.append(
+                                 ftv.Video(
+                                     playlist=[ftv.VideoMedia(video_uri)],
+                                     playlist_mode=ftv.PlaylistMode.LOOP,
+                                     aspect_ratio=aspect,
+                                     autoplay=False, 
+                                     filter_quality=ft.FilterQuality.HIGH,
+                                     muted=True,
+                                 )
+                             )
+
                              state.processed_results.append({
                                  "original": file_path,
                                  "output": out_video_path,
@@ -569,7 +625,15 @@ async def main(page: ft.Page):
                                  "type": "video"
                              })
 
+                        if summary_text:
+                            detect_result_container.controls.append(
+                                ft.Text(summary_text, selectable=True)
+                            )
+                        detect_result_container.update()
+
                     except Exception as err:
+                        import traceback
+                        traceback.print_exc()
                         detect_status_text.value = state.lang_data.get("error_generic", "✗ 發生錯誤: {err}").format(err=str(err))
                         detect_status_text.color = "red"
                         detect_status_text.update()
@@ -691,6 +755,8 @@ async def main(page: ft.Page):
         size=20,
         weight=ft.FontWeight.BOLD,
     )
+    
+    
     lang_select_label = ft.Text(state.lang_data.get("language_select", "語言選擇"))
 
     def on_lang_select(e):
@@ -711,8 +777,36 @@ async def main(page: ft.Page):
             ft.DropdownOption(key="en", text="English"),
         ],
         width=200,
+        border_color=ft.Colors.OUTLINE,
     )
     lang_dropdown.on_select = on_lang_select
+
+    # --- Theme selection ---
+    theme_select_label = ft.Text(state.lang_data.get("theme_select", "Theme Mode"))
+    
+    def on_theme_change(e):
+        val = e.control.value
+        state.theme_mode = val
+        if val == "system":
+            page.theme_mode = ft.ThemeMode.SYSTEM
+        elif val == "dark":
+            page.theme_mode = ft.ThemeMode.DARK
+        else:
+            page.theme_mode = ft.ThemeMode.LIGHT
+        
+        page.update()
+
+    theme_dropdown = ft.Dropdown(
+        value=state.theme_mode,
+        options=[
+            ft.DropdownOption(key="light", text=state.lang_data.get("theme_light", "Light")),
+            ft.DropdownOption(key="dark", text=state.lang_data.get("theme_dark", "Dark")),
+            ft.DropdownOption(key="system", text=state.lang_data.get("theme_system", "System")),
+        ],
+        width=200,
+        border_color=ft.Colors.OUTLINE,
+    )
+    theme_dropdown.on_select = on_theme_change
 
     def on_real_time_change(e):
         state.real_time_render = e.control.value
@@ -762,7 +856,8 @@ async def main(page: ft.Page):
         disabled=not state.use_custom_path,
         expand=True,
         on_change=on_path_change,
-        hint_text="Output Path"
+        hint_text="Output Path",
+        border_color=ft.Colors.OUTLINE,
     )
     
     btn_select_folder = ft.IconButton(
@@ -795,6 +890,7 @@ async def main(page: ft.Page):
 
         settings_title.value = state.lang_data.get("settings_title", "設定")
         lang_select_label.value = state.lang_data.get("language_select", "語言選擇")
+        theme_select_label.value = state.lang_data.get("theme_select", "Theme Mode")
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
         switch_custom_path.label = state.lang_data.get("use_custom_path", "自訂輸出路徑")
         conf_slider_label.value = f"{state.lang_data.get('conf_threshold', '信心度閥值')}: {state.confidence:.2f}"
@@ -813,6 +909,9 @@ async def main(page: ft.Page):
                 ft.Divider(),
                 lang_select_label,
                 lang_dropdown,
+                ft.Divider(),
+                theme_select_label,
+                theme_dropdown,
                 ft.Divider(),
                 real_time_switch,
                 ft.Divider(),

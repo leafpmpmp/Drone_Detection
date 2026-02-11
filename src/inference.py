@@ -273,6 +273,8 @@ class DetectorEngine:
                 "fps_eff": 0.0,
                 "last_msg": "",
                 "out_video_path": "",
+                "width": 0,
+                "height": 0,
             }
 
         def worker():
@@ -292,17 +294,36 @@ class DetectorEngine:
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             orig_size = torch.tensor([w, h])[None].to(self.device)
+            
+            with self._preview_meta_lock:
+                self._preview_meta["width"] = w
+                self._preview_meta["height"] = h
 
             writer = None
             out_video_path = ""
             log_f = None
             if write_video:
                 out_video_path = os.path.join(out_dir, "result.mp4")
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                
+                # 1. Try H.264 (avc1) - Standard for web/apps
+                fourcc = cv2.VideoWriter_fourcc(*"avc1")
                 writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+                
+                if not writer.isOpened():
+                    print("[DetectorEngine] avc1 failed. Trying mp4v (compatible fallback)...")
+                    # 2. Try mp4v - Commonly available but strictly legacy
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+
+                if not writer.isOpened():
+                     print("[DetectorEngine] mp4v failed. Trying hevc (H.265)...")
+                     # 3. Try hevc - Newer, might work if user has HEVC extensions
+                     fourcc = cv2.VideoWriter_fourcc(*"hevc")
+                     writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+                
                 if not writer.isOpened():
                     cap.release()
-                    msg = self._get_text("error_create_video", "無法建立輸出影片")
+                    msg = self._get_text("error_create_video", "無法建立輸出影片(Codecs failed)")
                     with self._preview_meta_lock:
                         self._preview_meta["status"] = "error"
                         self._preview_meta["last_msg"] = msg

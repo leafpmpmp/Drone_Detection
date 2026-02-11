@@ -55,6 +55,10 @@
     "file_selection": "File Selection",
     "choose_file": "Choose Image/Video",
     "language_select": "Language Selection",
+    "theme_select": "Theme Mode",
+    "theme_light": "Light",
+    "theme_dark": "Dark",
+    "theme_system": "System",
     "conf_threshold": "Confidence Threshold",
     "use_custom_path": "Use Custom Output Path",
     "real_time_status": "Frames: {frames}/{total_frames}, Detected: {detected_frames}, FPS: {fps}"

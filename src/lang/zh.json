@@ -55,6 +55,10 @@
     "file_selection": "檔案選擇",
     "choose_file": "選擇圖片/影片",
     "language_select": "語言選擇",
+    "theme_select": "主題模式",
+    "theme_light": "淺色",
+    "theme_dark": "深色",
+    "theme_system": "系統預設",
     "conf_threshold": "信心度閥值",
     "use_custom_path": "自訂輸出路徑",
     "real_time_status": "幀數: {frames}/{total_frames}, 偵測幀數: {detected_frames}, FPS: {fps}"

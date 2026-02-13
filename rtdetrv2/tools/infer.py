@@ -323,9 +323,13 @@ def InitArgs(imfile, video, outputdir, device, resume=None):
     class Args:
         pass
     
+    # Identify project root relative to this file (rtdetrv2/tools/infer.py -> ../.. -> root)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+
     args = Args()
-    args.config = r".\rtdetrv2\configs\rtdetrv2\rtdetrv2_r50vd_6x_coco.yml"
-    args.resume = resume if resume else r".\weights\R50_att_C4_best.pth"
+    args.config = os.path.join(project_root, "rtdetrv2", "configs", "rtdetrv2", "rtdetrv2_r50vd_6x_coco.yml")
+    args.resume = resume if resume else os.path.join(project_root, "weights", "R50_att_C4_best.pth")
     args.imfile = imfile
     args.sliced = False
     args.device = str(device)

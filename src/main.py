@@ -35,12 +35,12 @@ class State:
     real_time_render: bool = True
     confidence: float = 0.35
     use_custom_path: bool = False
-    custom_output_path: str = os.path.abspath(r"outputFile")
+    custom_output_path: str = os.path.abspath("outputFile")
     theme_mode: str = "system"
     lang_data: dict = field(default_factory=dict)
 
 state = State()
-detector = DetectorEngine(r"weights\R50_att_C4_best.pth")
+detector = DetectorEngine(os.path.join("weights", "R50_att_C4_best.pth"))
 
 
 def load_language(lang_code="zh"):

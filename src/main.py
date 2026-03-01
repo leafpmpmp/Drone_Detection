@@ -40,7 +40,8 @@ class State:
     lang_data: dict = field(default_factory=dict)
 
 state = State()
-detector = DetectorEngine(os.path.join("weights", "R50_att_C4_best.pth"))
+# Use BASE_DIR to make path absolute so it works from any CWD
+detector = DetectorEngine(os.path.join(BASE_DIR, "weights", "R50_att_C4_best.pth"))
 
 
 def load_language(lang_code="zh"):
@@ -558,6 +559,10 @@ async def main(page: ft.Page):
                             "output": out_img_path,
                             "type": "image"
                         })
+
+                        detect_status_text.value = state.lang_data.get("status_batch_completed", "✓ 狀態: 推理完成")
+                        detect_status_text.color = "green"
+
                     except Exception as err:
                         import traceback
                         traceback.print_exc()
@@ -630,6 +635,8 @@ async def main(page: ft.Page):
                                 ft.Text(summary_text, selectable=True)
                             )
                         detect_result_container.update()
+                        detect_status_text.value = state.lang_data.get("status_batch_completed", "✓ 狀態: 推理完成")
+                        detect_status_text.color = "green"
 
                     except Exception as err:
                         import traceback
@@ -644,8 +651,6 @@ async def main(page: ft.Page):
                     detect_result_container.controls.append(ft.Text(msg, color="orange"))
                     detect_result_container.update()
 
-            detect_status_text.value = state.lang_data.get("status_batch_completed", "✓ 所有檔案處理完成")
-            detect_status_text.color = "green"
             detect_progress_row.visible = False
             
             if state.processed_results:

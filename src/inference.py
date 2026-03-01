@@ -8,9 +8,10 @@ import queue
 import cv2
 import torch
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Remove PROJECT_ROOT path insertion since rtdetrv2 is now in src/
+# PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# if PROJECT_ROOT not in sys.path:
+#    sys.path.insert(0, PROJECT_ROOT)
 
 from rtdetrv2.tools.infer import InitArgs, draw, initModel
 

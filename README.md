@@ -36,3 +36,11 @@ or
 ```
 python ./src/main.py
 ```
+
+## Build the app
+
+### uv
+
+<pre>
+uv run (--extra cu128) flet build <i>target_system</i> --module-name main
+</pre>

@@ -238,7 +238,7 @@ def Inference(args):
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         # set output video type .mp4
-        fourcc = cv2.VideoWriter_fourcc("m", "p", "4", "v")
+        fourcc = cv2.VideoWriter_fourcc(*"X264")
         video = os.path.split(args.imfile)[-1]
         video_name = video.split(".")[0]
 

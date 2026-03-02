@@ -127,10 +127,53 @@ async def main(page: ft.Page):
     # --- Export UI Setup ---
     export_ui_row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER)
 
-    def click_export(e):
-        # Placeholder for export action
-        detect_status_text.value = state.lang_data.get("export_not_implemented", "Export logic to be implemented")
-        detect_status_text.update()
+    export_file_picker = ft.FilePicker()    
+    # Must add file picker to page overlay
+    page.overlay.append(export_file_picker)
+
+    async def click_export(e):
+        export_path = await export_file_picker.save_file(
+            file_name="results.zip",
+            allowed_extensions=["zip"]
+        )
+        
+        if not export_path:
+            return
+        
+        # Ensure correct extension if user didn't type it
+        if not export_path.lower().endswith(".zip"):
+            export_path += ".zip"
+
+        try:
+            with zipfile.ZipFile(export_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for result in state.processed_results:
+                    # original: source file path
+                    # output: processed file path
+                    
+                    original_name = os.path.basename(result["original"])
+                    folder_name, _ = os.path.splitext(original_name)
+                    
+                    output_file_path = result["output"]
+                    if output_file_path and os.path.exists(output_file_path):
+                        zip_entry_name = os.path.join(folder_name, os.path.basename(output_file_path))
+                        zf.write(output_file_path, arcname=zip_entry_name)
+                    
+                    if "log" in result:
+                        log_file_path = result["log"]
+                        if log_file_path and os.path.exists(log_file_path):
+                            zip_entry_name = os.path.join(folder_name, os.path.basename(log_file_path))
+                            zf.write(log_file_path, arcname=zip_entry_name)
+                            
+            detect_status_text.value = state.lang_data.get("export_success", "Exported successfully to {path}").format(path=export_path)
+            detect_status_text.color = "green"
+            detect_status_text.update()
+            
+        except Exception as err:
+            import traceback
+            traceback.print_exc()
+            detect_status_text.value = f"Export failed: {str(err)}"
+            detect_status_text.color = "red"
+            detect_status_text.update()
 
     btn_export = ft.FilledButton(
         content=ft.Text(state.lang_data.get("btn_export", "Export Results")),

@@ -128,8 +128,6 @@ async def main(page: ft.Page):
     export_ui_row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER)
 
     export_file_picker = ft.FilePicker()    
-    # Must add file picker to page overlay
-    page.overlay.append(export_file_picker)
 
     async def click_export(e):
         export_path = await export_file_picker.save_file(

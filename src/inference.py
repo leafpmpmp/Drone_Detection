@@ -7,23 +7,109 @@ import threading
 import queue
 import cv2
 import torch
+import torch.nn as nn
+import numpy as np
 
-# Remove PROJECT_ROOT path insertion since rtdetrv2 is now in src/
-# PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-# if PROJECT_ROOT not in sys.path:
-#    sys.path.insert(0, PROJECT_ROOT)
+# Import D-FINE core configuration
+from engine.core import YAMLConfig
 
-from rtdetrv2.tools.infer import InitArgs, draw, initModel
+def draw_boxes(images, labels, boxes, scores, conf_thres=0.35):
+    """
+    OpenCV-based drawing function to replace the rtdetrv2 dependency.
+    """
+    detect_frame = images[0].copy()
+    scr = scores[0]
+    
+    # Filter by confidence threshold
+    valid_mask = scr > conf_thres
+    lab = labels[0][valid_mask]
+    box = boxes[0][valid_mask]
+    scrs = scr[valid_mask]
+    
+    box_count = len(box)
+    
+    for j, b in enumerate(box):
+        b_np = b.detach().cpu().numpy().astype(int)
+        l_id = lab[j].item()
+        s_val = scrs[j].item()
+        
+        # Draw bounding box (Red)
+        cv2.rectangle(detect_frame, (b_np[0], b_np[1]), (b_np[2], b_np[3]), (0, 0, 255), 2)
+        # Draw label (Blue)
+        label_text = f"Class {l_id} {s_val:.2f}"
+        cv2.putText(detect_frame, label_text, (b_np[0], max(0, b_np[1] - 10)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        
+    return detect_frame, box_count
+
+
+class DFineWrapper(nn.Module):
+    """Wrapper to handle D-FINE deploy mode operations natively and fix device mismatches."""
+    def __init__(self, cfg, device):
+        super().__init__()
+        
+        # 1. Move to device BEFORE deploy to ensure any auto-generated tensors default to GPU
+        cfg.model.to(device)
+        cfg.postprocessor.to(device)
+        
+        self.model = cfg.model.deploy()
+        self.postprocessor = cfg.postprocessor.deploy()
+        
+        # 2. Force sweep hidden python attributes (lists/tuples) that .deploy() stranded on CPU
+        self._force_tensors_to_device(self.model, device)
+        self._force_tensors_to_device(self.postprocessor, device)
+
+    def _force_tensors_to_device(self, module, device):
+        """Recursively forces hidden tensor attributes to the target device."""
+        # Check standard attributes
+        for attr_name in dir(module):
+            # Skip dunder methods to avoid messing with Python internals
+            if attr_name.startswith('__'): 
+                continue
+            
+            try:
+                attr = getattr(module, attr_name)
+                # Catch stray individual tensors
+                if isinstance(attr, torch.Tensor):
+                    setattr(module, attr_name, attr.to(device))
+                # Catch lists or tuples containing tensors (This is where D-FINE hides pos_embeds)
+                elif isinstance(attr, (list, tuple)):
+                    new_attr = []
+                    changed = False
+                    for item in attr:
+                        if isinstance(item, torch.Tensor):
+                            new_attr.append(item.to(device))
+                            changed = True
+                        else:
+                            new_attr.append(item)
+                    
+                    if changed:
+                        # Reassign the updated list/tuple back to the module
+                        setattr(module, attr_name, type(attr)(new_attr))
+            except Exception:
+                pass
+                
+        # Traverse submodules
+        for child in module.children():
+            self._force_tensors_to_device(child, device)
+
+    def forward(self, images, orig_target_sizes):
+        outputs = self.model(images)
+        outputs = self.postprocessor(outputs, orig_target_sizes)
+        return outputs
 
 
 class DetectorEngine:
     def __init__(
         self,
         model_path: str,
+        config_path: str,          # Added config path requirement
         device: str | None = None,
         output_root: str = "outputFile",
     ):
         self.model_path = model_path
+        self.config_path = config_path 
+        
         if device:
             self.device = torch.device(device)
         elif torch.cuda.is_available():
@@ -68,14 +154,32 @@ class DetectorEngine:
     def _ensure_model(self, sample_input_path: str, is_video: bool, output_dir: str):
         if self._model is not None:
             return
-        args = InitArgs(sample_input_path, is_video, output_dir, self.device, self.model_path)
-        self._model = initModel(args)
-        # Note: Do NOT use .half() on model here manually! 
-        # We will use autocast for mixed precision.
+            
+        print("Loading D-FINE Model Configuration and Weights...")
+        
+        # Keep your num_classes override if you are passing it here dynamically
+        cfg = YAMLConfig(self.config_path, resume=self.model_path, num_classes=2)
+
+        if 'HGNetv2' in cfg.yaml_cfg:
+            cfg.yaml_cfg['HGNetv2']['pretrained'] = False
+
+        checkpoint = torch.load(self.model_path, map_location='cpu')
+        if 'ema' in checkpoint:
+            state = checkpoint['ema']['module']
+        else:
+            state = checkpoint['model']
+
+        # Load state and wrap into deployable structure (passing self.device)
+        cfg.model.load_state_dict(state)
+        self._model = DFineWrapper(cfg, self.device).to(self.device)
+        self._model.eval()
 
     def _prepare_input(self, frame_bgr):
+        # D-FINE expects RGB (original used PIL.Image which is RGB)
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        
         # Resize on CPU (OpenCV is fast enough and avoids upload overhead for large frames)
-        frame_resized = cv2.resize(frame_bgr, (640, 640), interpolation=cv2.INTER_LINEAR)
+        frame_resized = cv2.resize(frame_rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
         
         # Upload as uint8 (4x smaller transfer than float32)
         tensor = torch.from_numpy(frame_resized).permute(2, 0, 1).to(self.device, non_blocking=True)
@@ -88,7 +192,6 @@ class DetectorEngine:
     def _run_forward(self, im_data, orig_size):
         # Use autocast to handle mixed precision (Float/Half) automatically
         if self.device.type != "cpu":
-            # For XPU (and CUDA), use half precision (Float16) where safe
             with torch.autocast(device_type=self.device.type, dtype=torch.float16):
                 return self._model(im_data, orig_size)
         else:
@@ -130,13 +233,13 @@ class DetectorEngine:
             raise RuntimeError(self._get_text("error_read_image", "cv2.imread 讀不到圖片（路徑或格式可能有問題）"))
 
         h, w = img.shape[:2]
-        orig_size = torch.tensor([w, h])[None].to(self.device)
+        orig_size = torch.tensor([[w, h]]).to(self.device)
 
         im_data = self._prepare_input(img)
 
         output = self._run_forward(im_data, orig_size)
         labels, boxes, scores = output
-        detect_frame, box_count = draw([img], labels, boxes, scores, 0.35)
+        detect_frame, box_count = draw_boxes([img], labels, boxes, scores, 0.35)
 
         out_img_path = os.path.join(out_dir, "result.jpg")
         cv2.imwrite(out_img_path, detect_frame)
@@ -155,25 +258,20 @@ class DetectorEngine:
     def ensure_initialized(self):
         if self._model is not None:
             return
-        # Dummy args. is_video=False, sample_input_path="dummy.jpg"
-        args = InitArgs("dummy.jpg", False, self.output_root, self.device, self.model_path)
-        self._model = initModel(args)
-        # FP16 Optimization
-        if self.device.type != "cpu":
-            self._model.half()
+        self._ensure_model("dummy.jpg", False, self.output_root)
 
     def infer_frame(self, frame_bgr, conf_thres=0.35):
         self.ensure_initialized()
         
         h, w = frame_bgr.shape[:2]
-        orig_size = torch.tensor([w, h])[None].to(self.device)
+        orig_size = torch.tensor([[w, h]]).to(self.device)
 
         im_data = self._prepare_input(frame_bgr)
 
         output = self._run_forward(im_data, orig_size)
         labels, boxes, scores = output
         
-        detect_frame, box_count = draw([frame_bgr], labels, boxes, scores, conf_thres)
+        detect_frame, box_count = draw_boxes([frame_bgr], labels, boxes, scores, conf_thres)
         return detect_frame, box_count
 
     def _infer_video_blocking(self, video_path: str, out_dir: str):
@@ -197,7 +295,7 @@ class DetectorEngine:
             cap.release()
             raise RuntimeError(self._get_text("error_create_video", "無法建立輸出影片（mp4v/路徑/權限問題）"))
 
-        orig_size = torch.tensor([w, h])[None].to(self.device)
+        orig_size = torch.tensor([[w, h]]).to(self.device)
 
         frames = 0
         detected_frames = 0
@@ -212,7 +310,7 @@ class DetectorEngine:
 
             output = self._run_forward(im_data, orig_size)
             labels, boxes, scores = output
-            detect_frame, box_count = draw([frame], labels, boxes, scores, 0.35)
+            detect_frame, box_count = draw_boxes([frame], labels, boxes, scores, 0.35)
 
             if box_count > 0:
                 detected_frames += 1
@@ -294,7 +392,7 @@ class DetectorEngine:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            orig_size = torch.tensor([w, h])[None].to(self.device)
+            orig_size = torch.tensor([[w, h]]).to(self.device)
             
             with self._preview_meta_lock:
                 self._preview_meta["width"] = w
@@ -306,19 +404,14 @@ class DetectorEngine:
             if write_video:
                 out_video_path = os.path.join(out_dir, "result.mp4")
                 
-                # 1. Try H.264 (avc1) - Standard for web/apps
                 fourcc = cv2.VideoWriter_fourcc(*"avc1")
                 writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
                 
                 if not writer.isOpened():
-                    print("[DetectorEngine] avc1 failed. Trying mp4v (compatible fallback)...")
-                    # 2. Try mp4v - Commonly available but strictly legacy
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                     writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
 
                 if not writer.isOpened():
-                     print("[DetectorEngine] mp4v failed. Trying hevc (H.265)...")
-                     # 3. Try hevc - Newer, might work if user has HEVC extensions
                      fourcc = cv2.VideoWriter_fourcc(*"hevc")
                      writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
                 
@@ -339,7 +432,6 @@ class DetectorEngine:
                     print(f"Failed to create log file: {e}")
 
             t0 = time.time()
-            last_ui_t = time.time()
             frames = 0
             detected_frames = 0
 
@@ -352,7 +444,7 @@ class DetectorEngine:
 
                 output = self._run_forward(im_data, orig_size)
                 labels, boxes, scores = output
-                detect_frame, box_count = draw([frame], labels, boxes, scores, conf)
+                detect_frame, box_count = draw_boxes([frame], labels, boxes, scores, conf)
 
                 if box_count > 0:
                     detected_frames += 1
@@ -390,8 +482,6 @@ class DetectorEngine:
                         self._preview_meta["last_msg"] = msg
                         self._preview_meta["out_video_path"] = out_video_path
 
-                    last_ui_t = now
-
             cap.release()
             if writer is not None:
                 writer.release()
@@ -403,7 +493,6 @@ class DetectorEngine:
 
             status = "stopped" if self._stop_event.is_set() else "done"
             
-            # Generate full summary similar to _infer_video_blocking
             summary = []
             summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
             summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
@@ -417,10 +506,9 @@ class DetectorEngine:
 
             with self._preview_meta_lock:
                 self._preview_meta["status"] = status
-                self._preview_meta["last_msg"] = full_summary_text  # Store full summary here for retrieval if needed
+                self._preview_meta["last_msg"] = full_summary_text 
                 self._preview_meta["out_video_path"] = out_video_path
 
-            # Send __done__ with full summary payload
             self._push_preview(("__done__", full_summary_text))
 
 

@@ -6,10 +6,13 @@ import cv2
 import base64
 import shutil
 import zipfile
+import argparse
 from pathlib import Path
 import flet as ft
 import flet_video as ftv
 from dataclasses import dataclass, field
+
+import torch
 from inference import DetectorEngine
 from stream import StreamManager
 
@@ -43,7 +46,12 @@ class State:
 
 state = State()
 # Use BASE_DIR to make path absolute so it works from any CWD
-detector = DetectorEngine(os.path.join(BASE_DIR, "weights", "R50_att_C4_best.pth"))
+
+
+detector = DetectorEngine(
+    model_path=os.path.join(BASE_DIR, "weights", "best_stg2.pth"),
+    config_path=os.path.join(BASE_DIR, "configs", "rtv4", "rtv4_hgnetv2_s_coco.yml"),
+    device="cuda" if torch.cuda.is_available() else "cpu",)
 
 
 def load_language(lang_code="zh"):

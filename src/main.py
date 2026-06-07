@@ -12,7 +12,9 @@ import flet_video as ftv
 from dataclasses import dataclass, field
 from inference import DetectorEngine
 from stream import StreamManager
-import torch
+
+# Force the Flutter runtime to request full video capabilities
+os.environ["FLET_DESKTOP_FLAVOR"] = "full"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

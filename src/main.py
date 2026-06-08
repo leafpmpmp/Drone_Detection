@@ -3,7 +3,6 @@ import sys
 import time
 import json
 import asyncio
-import cv2
 import base64
 import shutil
 import zipfile
@@ -33,6 +32,7 @@ if os.name == "nt":
         except Exception:
             pass
 
+import cv2
 @dataclass
 class State:
     picked_files: list[ft.FilePickerFile] = field(default_factory=list)

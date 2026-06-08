@@ -283,7 +283,7 @@ class DetectorEngine:
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps is None or fps <= 0:
-            fps = 30.0
+            fps = 114514.0  # Default to a high FPS if it cannot be determined
 
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

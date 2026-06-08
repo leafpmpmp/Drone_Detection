@@ -3,7 +3,12 @@ import threading
 import time
 import base64
 import os
-from inference import DetectorEngine
+from typing import Protocol
+
+
+class InferenceBackendProtocol(Protocol):
+    def predict(self, image, conf_thres: float = 0.35):
+        ...
 
 # Custom Threaded Reader to avoid "Reader too slow" and buffer issues
 class ThreadedCamera:
@@ -51,7 +56,7 @@ class ThreadedCamera:
         return self.status
 
 class StreamManager:
-    def __init__(self, detector: DetectorEngine, update_callback):
+    def __init__(self, detector: InferenceBackendProtocol, update_callback):
         self.detector = detector
         self.update_callback = update_callback
         self.running = False
@@ -96,7 +101,10 @@ class StreamManager:
                 continue
             
             try:
-                processed_frame, count = self.detector.infer_frame(frame, self.confidence)
+                processed_frame, count = self.detector.predict(
+                    frame,
+                    self.confidence,
+                )
                 
                 # Check if frame is valid
                 if processed_frame is None or processed_frame.size == 0:

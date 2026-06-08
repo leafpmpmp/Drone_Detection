@@ -37,6 +37,31 @@ or
 python ./src/main.py
 ```
 
+### Inference backend
+
+PyTorch remains the default:
+
+```powershell
+python src/main.py --backend torch
+```
+
+Use the TensorRT engine:
+
+```powershell
+python src/main.py --backend trt --engine-path src/weights/model.engine
+```
+
+The backend can also be selected with an environment variable:
+
+```powershell
+$env:DETECTOR_BACKEND = "trt"
+$env:TENSORRT_ENGINE_PATH = "src/weights/model.engine"
+python src/main.py
+```
+
+TensorRT is optional. The `trt` backend requires a CUDA-enabled PyTorch
+installation and the TensorRT Python package.
+
 ## Build the app
 
 ### uv

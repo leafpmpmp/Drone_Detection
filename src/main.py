@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import asyncio
@@ -13,13 +14,14 @@ import flet_video as ftv
 from dataclasses import dataclass, field
 
 import torch
-from inference import DetectorEngine
+from inference_backend import create_inference_backend
 from stream import StreamManager
 
 # Force the Flutter runtime to request full video capabilities
 os.environ["FLET_DESKTOP_FLAVOR"] = "full"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_ENGINE_PATH = "src/weights/model.engine"
 
 # Add the directory containing main.py (src/) to the DLL search path and system PATH.
 # This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
@@ -48,10 +50,33 @@ state = State()
 # Use BASE_DIR to make path absolute so it works from any CWD
 
 
-detector = DetectorEngine(
+def parse_inference_options():
+    env_backend = os.environ.get("DETECTOR_BACKEND", "torch").strip().lower()
+    if env_backend not in ("torch", "trt"):
+        raise ValueError(
+            "DETECTOR_BACKEND must be either 'torch' or 'trt', "
+            f"got: {env_backend}"
+        )
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--backend", choices=("torch", "trt"), default=env_backend)
+    parser.add_argument(
+        "--engine-path",
+        default=os.environ.get("TENSORRT_ENGINE_PATH", DEFAULT_ENGINE_PATH),
+    )
+    options, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0], *remaining]
+    return options
+
+
+inference_options = parse_inference_options()
+detector = create_inference_backend(
+    inference_options.backend,
     model_path=os.path.join(BASE_DIR, "weights", "best_stg2.pth"),
     config_path=os.path.join(BASE_DIR, "configs", "rtv4", "rtv4_hgnetv2_s_coco.yml"),
-    device="cuda" if torch.cuda.is_available() else "cpu",)
+    engine_path=inference_options.engine_path,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+)
 
 
 def load_language(lang_code="zh"):

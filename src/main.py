@@ -24,6 +24,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ENGINE_PATH = "src/weights/model.engine"
 DEFAULT_CONFIG_PATH = "src/configs/rtv4/rtv4_hgnetv2_s_coco.yml"
 DEFAULT_TORCH_PATH = os.path.join(BASE_DIR, "weights", "best_stg2.pth")
+TORCH_MODEL_PATH = os.path.join(BASE_DIR, "weights", "best_stg2.pth")
+TRT_MODEL_PATH = os.path.join(BASE_DIR, "weights", "model.engine")
 
 # Add the directory containing main.py (src/) to the DLL search path and system PATH.
 # This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
@@ -850,7 +852,7 @@ async def main(page: ft.Page):
             engine_path=inference_options.engine_path,
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
-
+    infer_type_label = ft.Text(state.lang_data.get("infer_type_select", "Inference Engine Type"))
     infer_type_dropdown = ft.Dropdown(
         label="Inference Engine Type",
         hint_text="Select your backend optimization model",
@@ -1027,6 +1029,9 @@ async def main(page: ft.Page):
                 ft.Divider(),
                 theme_select_label,
                 theme_dropdown,
+                ft.Divider(),
+                infer_type_label,
+                infer_type_dropdown,
                 ft.Divider(),
                 real_time_switch,
                 ft.Divider(),

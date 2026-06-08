@@ -59,6 +59,9 @@
     "theme_light": "Light",
     "theme_dark": "Dark",
     "theme_system": "System",
+    "infer_type_select": "Inference Engine Type",
+    "model_selection": "Model Selection",
+    "model_selection_hint": "Choose model file",
     "conf_threshold": "Confidence Threshold",
     "use_custom_path": "Use Custom Output Path",
     "real_time_status": "Frames: {frames}/{total_frames}, Detected: {detected_frames}, FPS: {fps}"

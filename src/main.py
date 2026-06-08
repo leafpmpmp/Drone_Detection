@@ -22,6 +22,8 @@ os.environ["FLET_DESKTOP_FLAVOR"] = "full"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ENGINE_PATH = "src/weights/model.engine"
+DEFAULT_CONFIG_PATH = "src/configs/rtv4/rtv4_hgnetv2_s_coco.yml"
+DEFAULT_TORCH_PATH = os.path.join(BASE_DIR, "weights", "best_stg2.pth")
 
 # Add the directory containing main.py (src/) to the DLL search path and system PATH.
 # This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
@@ -72,8 +74,8 @@ def parse_inference_options():
 inference_options = parse_inference_options()
 detector = create_inference_backend(
     inference_options.backend,
-    model_path=os.path.join(BASE_DIR, "weights", "best_stg2.pth"),
-    config_path=os.path.join(BASE_DIR, "configs", "rtv4", "rtv4_hgnetv2_s_coco.yml"),
+    model_path=DEFAULT_TORCH_PATH if inference_options.backend == "torch" else inference_options.engine_path,
+    config_path=DEFAULT_CONFIG_PATH,
     engine_path=inference_options.engine_path,
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
@@ -837,7 +839,31 @@ async def main(page: ft.Page):
         weight=ft.FontWeight.BOLD,
     )
     
-    
+    UI_TO_BACKEND = {"Torch (.pth)": "torch", "TensorRT (.engine)": "trt"}
+
+    def on_infer_type_change():
+        inference_options.backend = UI_TO_BACKEND.get(infer_type_dropdown.value, "torch")
+        detector = create_inference_backend(
+            inference_options.backend,
+            model_path=TORCH_MODEL_PATH if inference_options.backend == "torch" else TRT_MODEL_PATH,
+            config_path=DEFAULT_CONFIG_PATH,
+            engine_path=inference_options.engine_path,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+
+    infer_type_dropdown = ft.Dropdown(
+        label="Inference Engine Type",
+        hint_text="Select your backend optimization model",
+        value="Torch (.pth)",  # Set default value matching your current setup
+        width=300,
+        options=[
+            ft.dropdown.Option("Torch (.pth)"),
+            ft.dropdown.Option("ONNX (.onnx)"),
+            ft.dropdown.Option("TensorRT (.engine)"),
+        ],
+    )
+    infer_type_dropdown.on_select = on_infer_type_change
+
     lang_select_label = ft.Text(state.lang_data.get("language_select", "語言選擇"))
 
     def on_lang_select(e):

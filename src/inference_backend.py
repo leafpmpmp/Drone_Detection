@@ -4,6 +4,8 @@ from pathlib import Path
 
 from inference_torch import DetectorEngine
 from inference_trt import TensorRTDetectorEngine
+import gc
+import torch
 
 
 class BaseInferenceBackend:
@@ -87,6 +89,44 @@ def _resolve_engine_path(engine_path: str) -> Path:
             return candidate.resolve()
     return path
 
+class DetectorManager:
+    """Manages the lifecycle and memory of the active inference backend."""
+    
+    def __init__(self, model_path, config_path, engine_path, device):
+        self.model_path = model_path
+        self.config_path = config_path
+        self.engine_path = engine_path
+        self.device = device
+        
+        self.active_backend = None
+        self.current_backend_type = None
+
+    def set_backend(self, new_backend_type: str):
+        if self.current_backend_type == new_backend_type:
+            return self.active_backend # Already active
+
+        # 1. Demolish the old engine and free the VRAM
+        if self.active_backend is not None:
+            print(f"Tearing down {self.current_backend_type} engine...")
+            del self.active_backend
+            self.active_backend = None
+            
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # 2. Use your existing factory to build the new one
+        print(f"Spinning up {new_backend_type} engine...")
+        self.active_backend = create_inference_backend(
+            backend=new_backend_type,
+            model_path=self.model_path,
+            config_path=self.config_path,
+            engine_path=self.engine_path,
+            device=self.device
+        )
+        self.current_backend_type = new_backend_type
+        
+        return self.active_backend
 
 def create_inference_backend(
     backend: str,

@@ -20,7 +20,12 @@ from stream import StreamManager
 os.environ["FLET_DESKTOP_FLAVOR"] = "full"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "weights")
 DEFAULT_ENGINE_PATH = "src/weights/model.engine"
+DEFAULT_CONFIG_PATH = "src/configs/rtv4/rtv4_hgnetv2_s_coco.yml"
+DEFAULT_TORCH_PATH = os.path.join(MODEL_DIR, "best_stg2.pth")
+TORCH_MODEL_PATH = os.path.join(MODEL_DIR, "best_stg2.pth")
+TRT_MODEL_PATH = os.path.join(MODEL_DIR, "model.engine")
 
 # Add the directory containing main.py (src/) to the DLL search path and system PATH.
 # This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
@@ -72,8 +77,8 @@ def parse_inference_options():
 inference_options = parse_inference_options()
 detector = create_inference_backend(
     inference_options.backend,
-    model_path=os.path.join(BASE_DIR, "weights", "best_stg2.pth"),
-    config_path=os.path.join(BASE_DIR, "configs", "rtv4", "rtv4_hgnetv2_s_coco.yml"),
+    model_path=DEFAULT_TORCH_PATH if inference_options.backend == "torch" else inference_options.engine_path,
+    config_path=DEFAULT_CONFIG_PATH,
     engine_path=inference_options.engine_path,
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
@@ -837,7 +842,56 @@ async def main(page: ft.Page):
         weight=ft.FontWeight.BOLD,
     )
     
-    
+    UI_TO_BACKEND = {"Torch (.pth)": "torch", "TensorRT (.engine)": "trt"}
+    inference_type_dict = {"Torch (.pth)": 0, "ONNX (.onnx)": 1, "TensorRT (.engine)": 2}
+
+    def on_infer_type_change():
+        inference_options.backend = UI_TO_BACKEND.get(infer_type_dropdown.value, "torch")
+        model_selection_dropdown.options = model_list[inference_type_dict.get(infer_type_dropdown.value, 0)]
+
+    infer_type_label = ft.Text(state.lang_data.get("infer_type_select", "推理引擎類型"))
+    infer_type_dropdown = ft.Dropdown(
+        hint_text=state.lang_data.get("infer_type_hint", "選擇推理引擎類型"),
+        value="Torch (.pth)",  # Set default value matching your current setup
+        width=300,
+        options=[
+            ft.dropdown.Option("Torch (.pth)"),
+            ft.dropdown.Option("ONNX (.onnx)"),
+            ft.dropdown.Option("TensorRT (.engine)"),
+        ],
+    )
+    infer_type_dropdown.on_select = on_infer_type_change
+
+    model_selection_label = ft.Text(state.lang_data.get("model_selection", "模型選擇"))
+    def model_selection_grep():
+        options=[[],[],[]] # pth / onnx / engine
+        for name in os.listdir(MODEL_DIR):
+            if name.endswith(".pth"):
+                options[0].append(ft.dropdown.Option(name))
+            elif name.endswith(".onnx"):
+                options[1].append(ft.dropdown.Option(name))
+            elif name.endswith(".engine"):
+                options[2].append(ft.dropdown.Option(name))
+        return options
+    def on_model_selection_change():
+        inference_options.backend = UI_TO_BACKEND.get(infer_type_dropdown.value, "torch")
+        model_path = os.path.join(MODEL_DIR, model_selection_dropdown.value)
+        detector = create_inference_backend(
+            inference_options.backend,
+            model_path=model_path,
+            config_path=DEFAULT_CONFIG_PATH,
+            engine_path=inference_options.engine_path,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+        print(f"Switched to model: {model_selection_dropdown.value} with backend: {inference_options.backend}\n Model path: {model_path}")
+    model_list = model_selection_grep()
+    model_selection_dropdown = ft.Dropdown(
+        hint_text=state.lang_data.get("model_selection_hint", "選擇模型檔案"),
+        options=model_list[0],
+        width=300,
+    )
+    model_selection_dropdown.on_select = on_model_selection_change
+
     lang_select_label = ft.Text(state.lang_data.get("language_select", "語言選擇"))
 
     def on_lang_select(e):
@@ -979,6 +1033,11 @@ async def main(page: ft.Page):
             ft.DropdownOption(key="dark", text=state.lang_data.get("theme_dark", "Dark")),
             ft.DropdownOption(key="system", text=state.lang_data.get("theme_system", "System")),
         ]
+
+        infer_type_label.value = state.lang_data.get("infer_type_select", "推理引擎類型")
+        infer_type_dropdown.hint_text = state.lang_data.get("infer_type_hint", "選擇推理引擎類型")
+        model_selection_label.value = state.lang_data.get("model_selection", "模型選擇")
+        model_selection_dropdown.hint_text = state.lang_data.get("model_selection_hint", "選擇模型檔案")
         
         real_time_switch.label = state.lang_data.get("real_time_render", "即時影像渲染")
         switch_custom_path.label = state.lang_data.get("use_custom_path", "自訂輸出路徑")
@@ -1001,6 +1060,11 @@ async def main(page: ft.Page):
                 ft.Divider(),
                 theme_select_label,
                 theme_dropdown,
+                ft.Divider(),
+                infer_type_label,
+                infer_type_dropdown,
+                model_selection_label,
+                model_selection_dropdown,
                 ft.Divider(),
                 real_time_switch,
                 ft.Divider(),

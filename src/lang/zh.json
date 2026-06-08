@@ -59,6 +59,9 @@
     "theme_light": "淺色",
     "theme_dark": "深色",
     "theme_system": "系統預設",
+    "infer_type_select": "推理模型類型",
+    "model_selection": "模型選擇",
+    "model_selection_hint": "選擇模型檔案",
     "conf_threshold": "信心度閥值",
     "use_custom_path": "自訂輸出路徑",
     "real_time_status": "幀數: {frames}/{total_frames}, 偵測幀數: {detected_frames}, FPS: {fps}"

@@ -46,7 +46,7 @@
     "settings_title": "設定",
     "no_file_selected": "尚未選擇檔案",
     "status_prefix": "狀態: ",
-    "status_inferring": "狀態: 推理中（即時顯示）",
+    "status_inferring": "狀態: 推理中...",
     "status_batch_completed": "✓ 狀態: 推理完成",
     "status_waiting": "狀態: 等待操作",
     "status_cleared": "狀態: 已清除",

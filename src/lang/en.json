@@ -46,7 +46,7 @@
     "settings_title": "Settings",
     "no_file_selected": "No file selected",
     "status_prefix": "Status: ",
-    "status_inferring": "Status: Inferring (Real-time)",
+    "status_inferring": "Status: Inferring...",
     "status_batch_completed": "✓ Status: Inference Completed",
     "status_waiting": "Status: Waiting for operation",
     "status_cleared": "Status: Cleared",

@@ -10,6 +10,7 @@ import argparse
 from pathlib import Path
 import flet as ft
 import flet_video as ftv
+import cv2
 from dataclasses import dataclass, field
 
 import torch
@@ -21,11 +22,9 @@ os.environ["FLET_DESKTOP_FLAVOR"] = "full"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "weights")
-DEFAULT_ENGINE_PATH = "src/weights/model.engine"
 DEFAULT_CONFIG_PATH = "src/configs/rtv4/rtv4_hgnetv2_s_coco.yml"
-DEFAULT_TORCH_PATH = os.path.join(MODEL_DIR, "best_stg2.pth")
-TORCH_MODEL_PATH = os.path.join(MODEL_DIR, "best_stg2.pth")
-TRT_MODEL_PATH = os.path.join(MODEL_DIR, "model.engine")
+DEFAULT_TORCH_PATH = os.path.join(MODEL_DIR, "RTv4-S-hgnet.pth")
+DEFAULT_TRT_PATH = os.path.join(MODEL_DIR, "RTv4-S-hgnet.engine")
 
 # Add the directory containing main.py (src/) to the DLL search path and system PATH.
 # This ensures that external DLLs like openh264 placed in this folder are found by OpenCV.
@@ -37,7 +36,6 @@ if os.name == "nt":
         except Exception:
             pass
 
-import cv2
 @dataclass
 class State:
     picked_files: list[ft.FilePickerFile] = field(default_factory=list)
@@ -67,7 +65,7 @@ def parse_inference_options():
     parser.add_argument("--backend", choices=("torch", "trt"), default=env_backend)
     parser.add_argument(
         "--engine-path",
-        default=os.environ.get("TENSORRT_ENGINE_PATH", DEFAULT_ENGINE_PATH),
+        default=os.environ.get("TENSORRT_ENGINE_PATH", DEFAULT_TRT_PATH),
     )
     options, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining]
@@ -577,7 +575,7 @@ async def main(page: ft.Page):
         export_ui_row.visible = False
         export_ui_row.update()
         
-        status_template = state.lang_data.get("status_inferring", "狀態: 推理中（即時顯示）")
+        status_template = state.lang_data.get("status_inferring", "狀態: 推理中...")
         detect_status_text.value = status_template
         detect_status_text.color = "blue"
         page.update()

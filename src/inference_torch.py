@@ -8,6 +8,7 @@ import queue
 import cv2
 import torch
 import torch.nn as nn
+import torchvision.ops as ops
 import numpy as np
 
 # Import D-FINE core configuration
@@ -158,7 +159,7 @@ class DetectorEngine:
         print("Loading D-FINE Model Configuration and Weights...")
         
         # Keep your num_classes override if you are passing it here dynamically
-        cfg = YAMLConfig(self.config_path, resume=self.model_path, num_classes=2)
+        cfg = YAMLConfig(self.config_path, resume=self.model_path)
 
         if 'HGNetv2' in cfg.yaml_cfg:
             cfg.yaml_cfg['HGNetv2']['pretrained'] = False
@@ -191,11 +192,13 @@ class DetectorEngine:
 
     def _run_forward(self, im_data, orig_size):
         # Use autocast to handle mixed precision (Float/Half) automatically
-        if self.device.type != "cpu":
-            with torch.autocast(device_type=self.device.type, dtype=torch.float16):
+        with torch.no_grad():
+            # Use autocast to handle mixed precision
+            if self.device.type != "cpu":
+                with torch.autocast(device_type=self.device.type, dtype=torch.float16):
+                    return self._model(im_data, orig_size)
+            else:
                 return self._model(im_data, orig_size)
-        else:
-            return self._model(im_data, orig_size)
 
     def _encode_b64_jpg(self, bgr_img):
         ok, buffer = cv2.imencode(".jpg", bgr_img)
@@ -274,78 +277,13 @@ class DetectorEngine:
         detect_frame, box_count = draw_boxes([frame_bgr], labels, boxes, scores, conf_thres)
         return detect_frame, box_count
 
-    def _infer_video_blocking(self, video_path: str, out_dir: str):
-        t0 = time.time()
-
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise RuntimeError(self._get_text("error_open_video", "無法開啟影片（編碼或路徑可能有問題）"))
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps is None or fps <= 0:
-            fps = 114514.0  # Default to a high FPS if it cannot be determined
-
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        out_video_path = os.path.join(out_dir, "result.mp4")
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
-        if not writer.isOpened():
-            cap.release()
-            raise RuntimeError(self._get_text("error_create_video", "無法建立輸出影片（mp4v/路徑/權限問題）"))
-
-        orig_size = torch.tensor([[w, h]]).to(self.device)
-
-        frames = 0
-        detected_frames = 0
-        preview_b64 = None
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            im_data = self._prepare_input(frame)
-
-            output = self._run_forward(im_data, orig_size)
-            labels, boxes, scores = output
-            detect_frame, box_count = draw_boxes([frame], labels, boxes, scores, 0.35)
-
-            if box_count > 0:
-                detected_frames += 1
-
-            if preview_b64 is None:
-                preview_b64 = self._encode_b64_jpg(detect_frame)
-
-            writer.write(detect_frame)
-            frames += 1
-
-        cap.release()
-        writer.release()
-
-        dt = time.time() - t0
-        fps_eff = (frames / dt) if dt > 0 else 0.0
-
-        if preview_b64 is None:
-            blank = (torch.zeros((h, w, 3)) * 255).byte().cpu().numpy()
-            preview_b64 = self._encode_b64_jpg(blank)
-
-        summary = []
-        summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
-        summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
-        summary.append(f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}")
-        summary.append(f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s")
-        summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
-        summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
-
-        return preview_b64, "\n".join(summary), out_video_path
 
     def start_video_preview(
         self,
         video_path: str,
         out_dir: str | None = None,
         conf: float = 0.35,
+        track_conf: float = 0.60,
         ui_stride: int = 3,
         write_video: bool = True,
     ):
@@ -435,20 +373,124 @@ class DetectorEngine:
             frames = 0
             detected_frames = 0
 
+            # --- GPU Tensor Tracking States ---
+            visible_streak = 0
+            frames_since_infer = 0
+            missed_frames = 0
+
+            tracked_boxes = None      # Shape: (N, 4)
+            tracked_velocities = None # Shape: (N, 2)
+            tracked_labels = None
+            tracked_scores = None
+
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                detect_frame = frame.copy()
+                box_count = 0
+                
+                # 1. Determine if we should Infer or Track
+                do_tracking = (visible_streak >= 5) and (frames_since_infer < 2)
+                mode_text = ""
 
-                im_data = self._prepare_input(frame)
+                if not do_tracking:
+                    mode_text = "INFERRING"
+                    # --- DEEP LEARNING INFERENCE ---
+                    im_data = self._prepare_input(frame)
+                    output = self._run_forward(im_data, orig_size)
+                    labels, boxes, scores = output
+                    
+                    # Filter by confidence
+                    valid_mask = scores[0] > conf
+                    
+                    # 2. Add .detach().clone() to sever the memory link!
+                    new_boxes = boxes[0][valid_mask].detach().clone()
+                    new_labels = labels[0][valid_mask].detach().clone()
+                    new_scores = scores[0][valid_mask].detach().clone()
+                    
+                    box_count = len(new_boxes)
 
-                output = self._run_forward(im_data, orig_size)
-                labels, boxes, scores = output
-                detect_frame, box_count = draw_boxes([frame], labels, boxes, scores, conf)
+                    if box_count > 0:
+                        visible_streak += 1
+                        frames_since_infer = 0
+                        missed_frames = 0
+                        
+                        # --- Calculate Velocity strictly on GPU ---
+                        new_velocities = torch.zeros((box_count, 2), device=new_boxes.device)
+                        
+                        if tracked_boxes is not None and len(tracked_boxes) > 0:
+                            # Calculate intersection-over-union (IoU) to match new boxes to old boxes
+                            iou_matrix = ops.box_iou(new_boxes, tracked_boxes)
+                            
+                            for i in range(box_count):
+                                if iou_matrix.shape[1] > 0:
+                                    best_match_idx = torch.argmax(iou_matrix[i])
+                                    
+                                    # If IoU > 0.3, it's the same drone! Calculate drift.
+                                    if iou_matrix[i, best_match_idx] > 0.3: 
+                                        cx_new = (new_boxes[i, 0] + new_boxes[i, 2]) / 2.0
+                                        cy_new = (new_boxes[i, 1] + new_boxes[i, 3]) / 2.0
+                                        cx_old = (tracked_boxes[best_match_idx, 0] + tracked_boxes[best_match_idx, 2]) / 2.0
+                                        cy_old = (tracked_boxes[best_match_idx, 1] + tracked_boxes[best_match_idx, 3]) / 2.0
+                                        
+                                        # Record the velocity [dx, dy]
+                                        new_velocities[i, 0] = cx_new - cx_old
+                                        new_velocities[i, 1] = cy_new - cy_old
 
-                if box_count > 0:
+                        # Overwrite active state
+                        tracked_boxes = new_boxes
+                        tracked_velocities = new_velocities
+                        tracked_labels = new_labels
+                        tracked_scores = new_scores
+                        
+                    else:
+                        missed_frames += 1
+                        if missed_frames > 2:
+                            visible_streak = 0
+                            tracked_boxes = None
+
+                else:
+                    mode_text = "TRACKING (GPU)"
+                    # --- PURE GPU TENSOR EXTRAPOLATION ---
+                    frames_since_infer += 1
+                    
+                    if tracked_boxes is not None and len(tracked_boxes) > 0:
+                        box_count = len(tracked_boxes)
+                        
+                        # Shift the X and Y coordinates by the velocity vectors
+                        tracked_boxes[:, [0, 2]] += tracked_velocities[:, 0].unsqueeze(1)
+                        tracked_boxes[:, [1, 3]] += tracked_velocities[:, 1].unsqueeze(1)
+                        
+                        # Safety Clamp: Ensure boxes don't drift off-screen
+                        img_h, img_w = frame.shape[:2]
+                        tracked_boxes[:, [0, 2]] = torch.clamp(tracked_boxes[:, [0, 2]], min=0, max=img_w - 1)
+                        tracked_boxes[:, [1, 3]] = torch.clamp(tracked_boxes[:, [1, 3]], min=0, max=img_h - 1)
+
+                # --- UNIFIED CPU DRAWING BLOCK ---
+                # We only pull tensors to the CPU ONCE at the very end of the cycle to draw them.
+                if box_count > 0 and tracked_boxes is not None:
                     detected_frames += 1
+                    
+                    # Convert state tensors to NumPy integers
+                    boxes_np = tracked_boxes.detach().cpu().numpy().astype(int)
+                    labels_np = tracked_labels.detach().cpu().numpy()
+                    scores_np = tracked_scores.detach().cpu().numpy()
+                    
+                    for j in range(box_count):
+                        x1, y1, x2, y2 = boxes_np[j]
+                        
+                        # Style differently based on state
+                        color = (0, 255, 0) if do_tracking else (0, 0, 255)
+                        suffix = " (Tracked)" if do_tracking else ""
+                        
+                        cv2.rectangle(detect_frame, (x1, y1), (x2, y2), color, 2)
+                        label_text = f"Class {labels_np[j]} {scores_np[j]:.2f}{suffix}"
+                        cv2.putText(detect_frame, label_text, (x1, max(0, y1 - 10)), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+                # --- Finalize Frame ---
                 if writer is not None:
                     writer.write(detect_frame)
                     if log_f is not None and box_count > 0:
@@ -465,11 +507,12 @@ class DetectorEngine:
                     b64 = self._encode_b64_jpg(detect_frame)
                     msg = self._get_text(
                         "real_time_status",
-                        "frames={frames}/{total_frames}, detected_frames={detected_frames}, fps≈{fps}",
+                        "[{mode}] frames={frames}/{total_frames}, detected={detected_frames}, fps≈{fps}",
                     ).format(
+                        mode=mode_text,
                         frames=frames,
                         total_frames=total_frames,
-                        detected_frames=detected_frames,
+                        detected_frames=detected_frames,  # <--- Add this missing line back!
                         fps=f"{fps_eff:.1f}",
                     )
                     self._push_preview((b64, msg))
@@ -490,6 +533,7 @@ class DetectorEngine:
 
             dt = time.time() - t0
             fps_eff = (frames / dt) if dt > 0 else 0.0
+
 
             status = "stopped" if self._stop_event.is_set() else "done"
             

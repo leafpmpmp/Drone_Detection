@@ -5,7 +5,7 @@ __include__: [
 
 output_dir: ./outputs/rtv4_hgnetv2_s_coco
 
-num_classes: 2
+num_classes: 80
 
 teacher_model:
   type: "DINOv3TeacherModel"

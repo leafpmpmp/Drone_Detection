@@ -19,7 +19,7 @@ from src.engine.core import YAMLConfig
 def main(args, ):
     """main
     """
-    cfg = YAMLConfig(args.config, resume=args.resume, num_classes=2)
+    cfg = YAMLConfig(args.config, resume=args.resume, num_classes=80)
 
     if 'HGNetv2' in cfg.yaml_cfg:
         cfg.yaml_cfg['HGNetv2']['pretrained'] = False

@@ -75,9 +75,10 @@ def parse_inference_options():
 
 
 inference_options = parse_inference_options()
+default_model_path = DEFAULT_TORCH_PATH if inference_options.backend == "torch" else inference_options.engine_path
 detector = create_inference_backend(
     inference_options.backend,
-    model_path=DEFAULT_TORCH_PATH if inference_options.backend == "torch" else inference_options.engine_path,
+    model_path=default_model_path,
     config_path=DEFAULT_CONFIG_PATH,
     engine_path=inference_options.engine_path,
     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -884,10 +885,13 @@ async def main(page: ft.Page):
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
         print(f"Switched to model: {model_selection_dropdown.value} with backend: {inference_options.backend}\n Model path: {model_path}")
+    def grep_default_model_name(full_path):
+        return full_path.split('/')[-1] if full_path else None
     model_list = model_selection_grep()
     model_selection_dropdown = ft.Dropdown(
         hint_text=state.lang_data.get("model_selection_hint", "選擇模型檔案"),
         options=model_list[0],
+        value=grep_default_model_name(default_model_path), # default option
         width=300,
     )
     model_selection_dropdown.on_select = on_model_selection_change

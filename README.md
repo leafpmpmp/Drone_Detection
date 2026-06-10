@@ -1,7 +1,7 @@
-# DroneDetection app
+# RescueLens: A Dual-Mode Edge Media Inspection System for UAV-Based Search and Rescue
 
-This is the working demonstration system for the SIGIR 2026 DEMO Paper VRSAR.
-We present VRSAR, a lightweight, fully offline visual recognition system designed for real-time victim detection in the field.
+This is the working demonstration system for the ACM MM 2026 DEMO Paper **RescueLens**.
+We present RescueLens, a **lightweight**, **fully offline dual-mode** visual recognition system designed for real-time victim detection in the field.
 
 ## Run the app
 
@@ -33,6 +33,8 @@ python ./src/main.py
 
 ### Inference backend
 
+- Model weights should be placed in `src/weights/ ` .
+
 PyTorch remains the default:
 
 ```powershell
@@ -53,33 +55,27 @@ $env:TENSORRT_ENGINE_PATH = "src/weights/model.engine"
 python src/main.py
 ```
 
-TensorRT is optional. The `trt` backend requires a CUDA-enabled PyTorch
-installation and the TensorRT Python package.
+Or select backend and model files in the settings page from the app.
+
+- TensorRT is optional. The `trt` backend requires a CUDA-enabled PyTorch
+  installation and the TensorRT Python package.
 
 ## Tools
 
 ### 1. Setup
 
-```bash
+```powershell
 uv add onnx onnxsim onnxruntime
 ```
 
 ### 2. Export onnx
 
-```bash
+```powershell
 python src/tools/export_onnx.py --check -c src/configs/rtv4/rtv4_hgnetv2_${model}_coco.yml -r model.pth
 ```
 
 ### 3. Export TensorRT
 
-```bash
-trtexec --onnx="model.onnx" --saveEngine="model.engine" --fp16
+```powershell
+trtexec --onnx="src/weights/model.onnx" --saveEngine="src/weights/model.engine"
 ```
-
-## Build the app
-
-### uv
-
-<pre>
-uv run (--extra cu128) flet build <i>target_system</i> --module-name main
-</pre>

@@ -657,6 +657,9 @@ async def main(page: ft.Page):
                         detect_progress_row.visible = True
                         detect_progress_row.update()
 
+                        while detector.get_latest_preview() is not None:
+                            pass
+                        
                         detector.start_video_preview(
                             video_path=file_path,
                             conf=state.confidence,
@@ -874,6 +877,7 @@ async def main(page: ft.Page):
     def on_model_selection_change():
         inference_options.backend = UI_TO_BACKEND.get(infer_type_dropdown.value, "torch")
         model_path = os.path.join(MODEL_DIR, model_selection_dropdown.value)
+        global detector
         detector = create_inference_backend(
             inference_options.backend,
             model_path=model_path,

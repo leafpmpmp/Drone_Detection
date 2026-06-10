@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torchvision.ops as ops
 import numpy as np
+import torch.nn.functional as F
 
 # Import D-FINE core configuration
 from engine.core import YAMLConfig
@@ -100,6 +101,37 @@ class DFineWrapper(nn.Module):
         return outputs
 
 
+class ThreadedVideoWriter:
+    """Writes video frames in a background thread to prevent blocking the GPU."""
+    def __init__(self, path, fourcc, fps, size):
+        self.writer = cv2.VideoWriter(path, fourcc, fps, size)
+        self.q = queue.Queue(maxsize=128) # Buffer up to 128 frames
+        self.stopped = False
+        self.t = threading.Thread(target=self._write_loop, daemon=True)
+        self.t.start()
+
+    def _write_loop(self):
+        while not self.stopped or not self.q.empty():
+            try:
+                frame = self.q.get(timeout=0.1)
+                self.writer.write(frame)
+            except queue.Empty:
+                pass
+        self.writer.release()
+
+    def write(self, frame):
+        if not self.stopped:
+            # If queue is full (encoding is too slow), we drop frames to prevent memory explosion
+            if not self.q.full():
+                self.q.put(frame)
+
+    def isOpened(self):
+        return self.writer.isOpened()
+
+    def release(self):
+        self.stopped = True
+        self.t.join() # Wait for remaining frames in queue to finish writing
+
 class DetectorEngine:
     def __init__(
         self,
@@ -176,19 +208,19 @@ class DetectorEngine:
         self._model.eval()
 
     def _prepare_input(self, frame_bgr):
-        # D-FINE expects RGB (original used PIL.Image which is RGB)
+        # Only do color conversion on CPU
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         
-        # Resize on CPU (OpenCV is fast enough and avoids upload overhead for large frames)
-        frame_resized = cv2.resize(frame_rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
+        # Immediately upload the raw uint8 HWC frame to GPU
+        tensor = torch.from_numpy(frame_rgb).to(self.device, non_blocking=True)
         
-        # Upload as uint8 (4x smaller transfer than float32)
-        tensor = torch.from_numpy(frame_resized).permute(2, 0, 1).to(self.device, non_blocking=True)
+        # Permute to NCHW, cast to float, and normalize all on GPU
+        im_data = tensor.permute(2, 0, 1).unsqueeze(0).float() / 255.0
         
-        # Normalize on GPU to Float32
-        im_data = tensor.float() / 255.0
+        # Resize on GPU using bilinear interpolation
+        im_data = F.interpolate(im_data, size=(640, 640), mode='bilinear', align_corners=False)
         
-        return im_data.unsqueeze(0)
+        return im_data
 
     def _run_forward(self, im_data, orig_size):
         # Use autocast to handle mixed precision (Float/Half) automatically

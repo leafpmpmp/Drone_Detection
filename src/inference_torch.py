@@ -347,6 +347,8 @@ class DetectorEngine:
             }
 
         def worker():
+            import torch.nn.functional as F
+
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 msg = self._get_text("error_open_video", "無法開啟影片")
@@ -356,13 +358,10 @@ class DetectorEngine:
                 self._push_preview(("__error__", msg))
                 return
 
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            if fps is None or fps <= 0:
-                fps = 30.0
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            orig_size = torch.tensor([[w, h]]).to(self.device)
             
             with self._preview_meta_lock:
                 self._preview_meta["width"] = w
@@ -374,25 +373,13 @@ class DetectorEngine:
             if write_video:
                 out_video_path = os.path.join(out_dir, "result.mp4")
                 
+                # Using the ThreadedVideoWriter from our previous step
                 fourcc = cv2.VideoWriter_fourcc(*"avc1")
-                writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
+                writer = ThreadedVideoWriter(out_video_path, fourcc, fps, (w, h))
                 
                 if not writer.isOpened():
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                    writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
-
-                if not writer.isOpened():
-                     fourcc = cv2.VideoWriter_fourcc(*"hevc")
-                     writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w, h))
-                
-                if not writer.isOpened():
-                    cap.release()
-                    msg = self._get_text("error_create_video", "無法建立輸出影片(Codecs failed)")
-                    with self._preview_meta_lock:
-                        self._preview_meta["status"] = "error"
-                        self._preview_meta["last_msg"] = msg
-                    self._push_preview(("__error__", msg))
-                    return
+                    writer = ThreadedVideoWriter(out_video_path, fourcc, fps, (w, h))
                 
                 log_path = os.path.join(out_dir, "detections.log")
                 try:
@@ -405,157 +392,116 @@ class DetectorEngine:
             frames = 0
             detected_frames = 0
 
-            # --- GPU Tensor Tracking States ---
-            visible_streak = 0
-            frames_since_infer = 0
-            missed_frames = 0
+            # --- Batch Inference Configuration ---
+            BATCH_SIZE = 4  # Optimized multiplier for Tesla T4 Tensor Cores
+            batch_tensors = []
+            batch_raw_frames = []
 
-            tracked_boxes = None      # Shape: (N, 4)
-            tracked_velocities = None # Shape: (N, 2)
-            tracked_labels = None
-            tracked_scores = None
+            def process_current_batch(tensors, raw_frames_list):
+                nonlocal frames, detected_frames
+                if not tensors:
+                    return
 
+                # 1. Stack all individual frames into one 4D tensor directly on GPU
+                # Shape: (Batch_Size, 3, 640, 640)
+                batch_input = torch.cat(tensors, dim=0)
+                
+                # 2. Build the target sizes matrix matching the batch size
+                orig_sizes = torch.tensor([[w, h]] * len(raw_frames_list), device=self.device)
+                
+                # 3. Run a SINGLE parallel forward pass on the GPU for all frames!
+                labels, boxes, scores = self._run_forward(batch_input, orig_sizes)
+                
+                # 4. Process predictions sequentially for file writing and UI streaming
+                for idx in range(len(raw_frames_list)):
+                    frame = raw_frames_list[idx]
+                    detect_frame = frame.copy()
+                    
+                    # Extract this specific frame's predictions from the batched outputs
+                    f_labels = labels[idx]
+                    f_boxes = boxes[idx]
+                    f_scores = scores[idx]
+                    
+                    # Filter by confidence threshold
+                    valid_mask = f_scores > conf
+                    valid_labels = f_labels[valid_mask].detach().cpu().numpy()
+                    valid_boxes = f_boxes[valid_mask].detach().clone().cpu().numpy().astype(int)
+                    valid_scores = f_scores[valid_mask].detach().cpu().numpy()
+                    
+                    box_count = len(valid_boxes)
+                    if box_count > 0:
+                        detected_frames += 1
+                        
+                        # Render boxes onto the frame copy
+                        for j in range(box_count):
+                            x1, y1, x2, y2 = valid_boxes[j]
+                            cv2.rectangle(detect_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            label_text = f"Class {valid_labels[j]} {valid_scores[j]:.2f}"
+                            cv2.putText(detect_frame, label_text, (x1, max(0, y1 - 10)), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    
+                    # Hand off the frame to the background thread encoder
+                    if writer is not None:
+                        writer.write(detect_frame)
+                        if log_f is not None and box_count > 0:
+                            ts = frames / fps if fps > 0 else 0
+                            log_f.write(f"{frames},{ts:.2f},{box_count}\n")
+                            
+                    frames += 1
+                    
+                    # Render progress updates to Flet interface at the specified stride
+                    if frames % ui_stride == 0:
+                        now = time.time()
+                        dt = now - t0
+                        fps_eff = (frames / dt) if dt > 0 else 0.0
+
+                        b64 = self._encode_b64_jpg(detect_frame)
+                        msg = self._get_text(
+                            "real_time_status",
+                            "[BATCHED] frames={frames}/{total_frames}, detected={detected_frames}, fps≈{fps}",
+                        ).format(
+                            frames=frames,
+                            total_frames=total_frames,
+                            detected_frames=detected_frames,
+                            fps=f"{fps_eff:.1f}",
+                        )
+                        self._push_preview((b64, msg))
+
+                        with self._preview_meta_lock:
+                            self._preview_meta["frames"] = frames
+                            self._preview_meta["total_frames"] = total_frames
+                            self._preview_meta["detected_frames"] = detected_frames
+                            self._preview_meta["fps_eff"] = fps_eff
+                            self._preview_meta["last_msg"] = msg
+                            self._preview_meta["out_video_path"] = out_video_path
+
+            # --- Main Pipeline Accumulator Loop ---
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                detect_frame = frame.copy()
-                box_count = 0
+                # GPU Resizing Optimization from previous step
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                tensor = torch.from_numpy(frame_rgb).to(self.device, non_blocking=True)
+                im_data = tensor.permute(2, 0, 1).unsqueeze(0).float() / 255.0
+                im_data = F.interpolate(im_data, size=(640, 640), mode='bilinear', align_corners=False)
                 
-                # 1. Determine if we should Infer or Track
-                do_tracking = (visible_streak >= 5) and (frames_since_infer < 2)
-                mode_text = ""
-
-                if not do_tracking:
-                    mode_text = "INFERRING"
-                    # --- DEEP LEARNING INFERENCE ---
-                    im_data = self._prepare_input(frame)
-                    output = self._run_forward(im_data, orig_size)
-                    labels, boxes, scores = output
-                    
-                    # Filter by confidence
-                    valid_mask = scores[0] > conf
-                    
-                    # 2. Add .detach().clone() to sever the memory link!
-                    new_boxes = boxes[0][valid_mask].detach().clone()
-                    new_labels = labels[0][valid_mask].detach().clone()
-                    new_scores = scores[0][valid_mask].detach().clone()
-                    
-                    box_count = len(new_boxes)
-
-                    if box_count > 0:
-                        visible_streak += 1
-                        frames_since_infer = 0
-                        missed_frames = 0
-                        
-                        # --- Calculate Velocity strictly on GPU ---
-                        new_velocities = torch.zeros((box_count, 2), device=new_boxes.device)
-                        
-                        if tracked_boxes is not None and len(tracked_boxes) > 0:
-                            # Calculate intersection-over-union (IoU) to match new boxes to old boxes
-                            iou_matrix = ops.box_iou(new_boxes, tracked_boxes)
-                            
-                            for i in range(box_count):
-                                if iou_matrix.shape[1] > 0:
-                                    best_match_idx = torch.argmax(iou_matrix[i])
-                                    
-                                    # If IoU > 0.3, it's the same drone! Calculate drift.
-                                    if iou_matrix[i, best_match_idx] > 0.3: 
-                                        cx_new = (new_boxes[i, 0] + new_boxes[i, 2]) / 2.0
-                                        cy_new = (new_boxes[i, 1] + new_boxes[i, 3]) / 2.0
-                                        cx_old = (tracked_boxes[best_match_idx, 0] + tracked_boxes[best_match_idx, 2]) / 2.0
-                                        cy_old = (tracked_boxes[best_match_idx, 1] + tracked_boxes[best_match_idx, 3]) / 2.0
-                                        
-                                        # Record the velocity [dx, dy]
-                                        new_velocities[i, 0] = cx_new - cx_old
-                                        new_velocities[i, 1] = cy_new - cy_old
-
-                        # Overwrite active state
-                        tracked_boxes = new_boxes
-                        tracked_velocities = new_velocities
-                        tracked_labels = new_labels
-                        tracked_scores = new_scores
-                        
-                    else:
-                        missed_frames += 1
-                        if missed_frames > 2:
-                            visible_streak = 0
-                            tracked_boxes = None
-
-                else:
-                    mode_text = "TRACKING (GPU)"
-                    # --- PURE GPU TENSOR EXTRAPOLATION ---
-                    frames_since_infer += 1
-                    
-                    if tracked_boxes is not None and len(tracked_boxes) > 0:
-                        box_count = len(tracked_boxes)
-                        
-                        # Shift the X and Y coordinates by the velocity vectors
-                        tracked_boxes[:, [0, 2]] += tracked_velocities[:, 0].unsqueeze(1)
-                        tracked_boxes[:, [1, 3]] += tracked_velocities[:, 1].unsqueeze(1)
-                        
-                        # Safety Clamp: Ensure boxes don't drift off-screen
-                        img_h, img_w = frame.shape[:2]
-                        tracked_boxes[:, [0, 2]] = torch.clamp(tracked_boxes[:, [0, 2]], min=0, max=img_w - 1)
-                        tracked_boxes[:, [1, 3]] = torch.clamp(tracked_boxes[:, [1, 3]], min=0, max=img_h - 1)
-
-                # --- UNIFIED CPU DRAWING BLOCK ---
-                # We only pull tensors to the CPU ONCE at the very end of the cycle to draw them.
-                if box_count > 0 and tracked_boxes is not None:
-                    detected_frames += 1
-                    
-                    # Convert state tensors to NumPy integers
-                    boxes_np = tracked_boxes.detach().cpu().numpy().astype(int)
-                    labels_np = tracked_labels.detach().cpu().numpy()
-                    scores_np = tracked_scores.detach().cpu().numpy()
-                    
-                    for j in range(box_count):
-                        x1, y1, x2, y2 = boxes_np[j]
-                        
-                        # Style differently based on state
-                        color = (0, 255, 0) if do_tracking else (0, 0, 255)
-                        suffix = " (Tracked)" if do_tracking else ""
-                        
-                        cv2.rectangle(detect_frame, (x1, y1), (x2, y2), color, 2)
-                        label_text = f"Class {labels_np[j]} {scores_np[j]:.2f}{suffix}"
-                        cv2.putText(detect_frame, label_text, (x1, max(0, y1 - 10)), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                # --- Finalize Frame ---
-                if writer is not None:
-                    writer.write(detect_frame)
-                    if log_f is not None and box_count > 0:
-                        ts = frames / fps if fps > 0 else 0
-                        log_f.write(f"{frames},{ts:.2f},{box_count}\n")
-
-                frames += 1
-
-                if frames % ui_stride == 0:
-                    now = time.time()
-                    dt = now - t0
-                    fps_eff = (frames / dt) if dt > 0 else 0.0
-
-                    b64 = self._encode_b64_jpg(detect_frame)
-                    msg = self._get_text(
-                        "real_time_status",
-                        "[{mode}] frames={frames}/{total_frames}, detected={detected_frames}, fps≈{fps}",
-                    ).format(
-                        mode=mode_text,
-                        frames=frames,
-                        total_frames=total_frames,
-                        detected_frames=detected_frames,  # <--- Add this missing line back!
-                        fps=f"{fps_eff:.1f}",
-                    )
-                    self._push_preview((b64, msg))
-
-                    with self._preview_meta_lock:
-                        self._preview_meta["frames"] = frames
-                        self._preview_meta["total_frames"] = total_frames
-                        self._preview_meta["detected_frames"] = detected_frames
-                        self._preview_meta["fps_eff"] = fps_eff
-                        self._preview_meta["last_msg"] = msg
-                        self._preview_meta["out_video_path"] = out_video_path
+                # Append components to temporary batch buffers
+                batch_tensors.append(im_data)
+                batch_raw_frames.append(frame)
+                
+                # Once the accumulator list reaches the batch target, execute!
+                if len(batch_tensors) == BATCH_SIZE:
+                    process_current_batch(batch_tensors, batch_raw_frames)
+                    batch_tensors = []
+                    batch_raw_frames = []
+            
+            # --- Trailing Frame Cleanup ---
+            # If the video ends and has leftover frames that didn't fill a whole batch,
+            # process them immediately so no frames are dropped.
+            if not self._stop_event.is_set() and batch_tensors:
+                process_current_batch(batch_tensors, batch_raw_frames)
 
             cap.release()
             if writer is not None:
@@ -565,16 +511,15 @@ class DetectorEngine:
 
             dt = time.time() - t0
             fps_eff = (frames / dt) if dt > 0 else 0.0
-
-
             status = "stopped" if self._stop_event.is_set() else "done"
             
-            summary = []
-            summary.append(f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}")
-            summary.append(f"{self._get_text('summary_total_frames', '總幀數')}: {frames}")
-            summary.append(f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}")
-            summary.append(f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s")
-            summary.append(f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}")
+            summary = [
+                f"{self._get_text('summary_input', '輸入')}: {os.path.abspath(video_path)}",
+                f"{self._get_text('summary_total_frames', '總幀數')}: {frames}",
+                f"{self._get_text('summary_detected_frames_count', '偵測到目標的幀數')}: {detected_frames}",
+                f"{self._get_text('summary_time', '總耗時')}: {dt:.2f} s",
+                f"{self._get_text('summary_fps', '有效 FPS')}: {fps_eff:.2f}"
+            ]
             if write_video:
                 summary.append(f"{self._get_text('summary_output_file', '輸出檔案')}: {os.path.abspath(out_video_path)}")
 

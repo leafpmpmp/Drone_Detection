@@ -31,11 +31,8 @@ def main(args, ):
         else:
             state = checkpoint['model']
 
-        # NOTE load train mode state -> convert to deploy mode
         cfg.model.load_state_dict(state)
-
     else:
-        # raise AttributeError('Only support resume to load model.state_dict by now.')
         print('not load model.state_dict, use default init state dict...')
 
     class Model(nn.Module):
@@ -58,12 +55,18 @@ def main(args, ):
     with torch.no_grad():
         _ = model(data, size)
 
-    # dynamic_axes = {
-    #     'images': {0: 'N', },
-    #     'orig_target_sizes': {0: 'N'}
-    # }
+    # --- FIX 1: Uncomment and map ALL dynamic batch axes (Inputs & Outputs) ---
+    dynamic_axes = {
+        'images': {0: 'batch_size'},
+        'orig_target_sizes': {0: 'batch_size'},
+        'labels': {0: 'batch_size'},
+        'boxes': {0: 'batch_size'},
+        'scores': {0: 'batch_size'}
+    }
 
     output_file = args.resume.replace('.pth', '.onnx') if args.resume else 'model.onnx'
+    
+    print(f"Exporting model to ONNX with dynamic batch sizing...")
     with torch.no_grad():
         torch.onnx.export(
             model,
@@ -71,8 +74,8 @@ def main(args, ):
             output_file,
             input_names=['images', 'orig_target_sizes'],
             output_names=['labels', 'boxes', 'scores'],
-            dynamic_axes=None,
-            opset_version=18,
+            dynamic_axes=dynamic_axes,  # <--- FIX 2: Pass the dynamic mapping here
+            opset_version=16,           # <--- FIX 3: Downgrade to 16 for TensorRT compatibility
             verbose=False,
             do_constant_folding=True,
         )
@@ -86,11 +89,18 @@ def main(args, ):
     if args.simplify:
         import onnx
         import onnxsim
-        dynamic = False
-        # input_shapes = {'images': [1, 3, 640, 640], 'orig_target_sizes': [1, 2]} if dynamic else None
-        # input_shapes = {'images': data.shape, 'orig_target_sizes': size.shape} if dynamic else None
-        input_shapes = None
-        onnx_model_simplify, check = onnxsim.simplify(output_file, test_input_shapes=input_shapes)
+        
+        # --- FIX 4: Explicitly warn onnxsim to preserve our dynamic batch dimension ---
+        input_shapes = {
+            'images': ['batch_size', 3, 640, 640], 
+            'orig_target_sizes': ['batch_size', 2]
+        }
+        
+        print("Simplifying ONNX model layout...")
+        onnx_model_simplify, check = onnxsim.simplify(
+            output_file, 
+            test_input_shapes=None # Let onnxsim infer shapes organically while keeping them dynamic
+        )
         onnx.save(onnx_model_simplify, output_file)
         print(f'Simplify onnx model {check}...')
 

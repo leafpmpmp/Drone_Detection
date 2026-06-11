@@ -95,6 +95,7 @@ class StreamManager:
             return
 
         while self.running:
+            t1 = time.time()
             frame = self.cap.get_frame()
             if frame is None:
                 time.sleep(0.01)
@@ -117,6 +118,8 @@ class StreamManager:
             except Exception as e:
                 print(f"Stream Error: {e}")
                 time.sleep(0.1)
+            t2 = time.time()
+            print(f"Stream loop time: {(t2 - t1)*1000:.2f} ms")
         
         if self.cap:
             self.cap.release()

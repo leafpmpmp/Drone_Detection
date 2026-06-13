@@ -60,6 +60,22 @@ Or select backend and model files in the settings page from the app.
 - TensorRT is optional. The `trt` backend requires a CUDA-enabled PyTorch
   installation and the TensorRT Python package.
 
+## Supplementery experiment results
+
+| FPS  |540p|1080P|2160P|
+|------|----|-----|-----|
+|torch (baseline) |56.07|41.40|15.51|
+|torch optimized|86.83|63.34|28.63|
+|TensorRT|123.68|75.78|29.92|
+
+* Tests conducted while device plugged in.
+* FPS counts are end-to-end on GUI, average of 2-minute clips.
+* Basic device spec:
+  | |CPU|GPU|
+  |-|---|---|
+  |model|Core 5 210H|RTX 4050|
+  |TDP|45W+70W|115W+25W|
+
 ## Tools
 
 ### 1. Setup
